@@ -1,0 +1,11 @@
+[Unit]
+Description=Check v2rayA outbound health every minute
+
+[Timer]
+OnBootSec=45s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+Unit=v2raya-failover.service
+
+[Install]
+WantedBy=timers.target

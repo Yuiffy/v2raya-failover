@@ -1,0 +1,30 @@
+{
+  "container": "v2raya",
+  "data_dir": "/etc/v2raya",
+  "api_url": "http://127.0.0.1:2017",
+  "auth_file": "/etc/v2raya-failover/operator-auth.json",
+  "proxy_url": "http://127.0.0.1:20172",
+  "verify_ports": [20171, 20172],
+  "failure_threshold": 2,
+  "subscription_refresh_seconds": 0,
+  "refresh_subscription_indices": [0],
+  "subscription_outbound": "downloads",
+  "groups": {
+    "proxy": {
+      "subscription_indices": [0],
+      "name_prefixes": ["美国", "US"],
+      "require_country": "US",
+      "routing_domains": ["openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com"],
+      "probes": [{"url": "https://api.openai.com/v1/models", "status": 401, "contains": "Missing bearer authentication"}]
+    },
+    "downloads": {
+      "subscription_indices": [0],
+      "name_prefixes": ["香港", "HK"],
+      "routing_domains": ["docker.io", "docker.com", "ghcr.io", "githubusercontent.com", "pypi.org", "pythonhosted.org", "deb.debian.org", "security.debian.org", "registry.npmjs.org"],
+      "probes": [
+        {"url": "https://pypi.org/simple/pip/", "status": 200},
+        {"url": "https://registry-1.docker.io/v2/", "status": 401, "contains": "UNAUTHORIZED"}
+      ]
+    }
+  }
+}

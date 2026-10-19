@@ -1,0 +1,4 @@
+interface:
+  display_name: "v2rayA Failover"
+  short_description: "Deploy cached-node failover with private auth and rollback"
+  default_prompt: "Use $v2raya-failover to inspect and deploy automatic node failover on my Linux v2rayA server while keeping subscription updates manual."
