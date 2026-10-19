@@ -48,6 +48,14 @@ curl, Docker and systemd. This release targets v2rayA 2.2.7.4; Xray 25.10.15 is 
 
 ## Install and verify
 
+Feishu alerts are optional and disabled by default. If requested, obtain the path of an
+operator-provided private bot JSON file, not its contents in chat. Set `feishu.enabled`
+to `true`, select its `config_file`, an instance label and `zh` or `en` language. The
+file holds an official v2 `webhook` and optional signing `secret`; keep it root-owned
+0600 and outside the repository. See the notification section in the configuration reference.
+Validation and dry-run must not POST a test message to the group. A request for switch
+alerts authorizes actual verified-switch alerts, not unrelated group messages.
+
 Run `python3 scripts/manage.py install --config /private/path/profile.json` as root.
 It saves private backups, preserves unrelated routing, adds marked rules, disables native
 subscription auto-update, installs the watchdog and enables the systemd timer. An unhealthy
@@ -58,6 +66,12 @@ completed automatic timer run and confirm the subscription attempt/success times
 not advance. Use `python3 /opt/v2raya-failover/v2raya_failover.py --check` for read-only health
 checks. Do not inject a failure into the user's active service just to demonstrate failover;
 use an isolated container if fault injection is warranted.
+
+Alerts are sent only after the switch and all configured port checks succeed. They must
+not trigger rollback if delivery fails. Each event has at most one send attempt, journaled
+before POST; `pending` or `uncertain` receipts require checking the group before manual
+reconciliation. Do not automatically resend them. A real delivery is verified only by
+an accepted business response; a configured webhook alone does not prove delivery.
 
 Explain that probes are HTTPS requests through the real proxy, not just ping. An expected
 OpenAI 401 validates connectivity without an API key or model call; it does not validate

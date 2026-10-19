@@ -24,6 +24,8 @@ import time
 import urllib.parse
 import urllib.request
 
+from feishu_notify import notify_switch
+
 
 def log(event, **fields):
     print(json.dumps({"event": event, **fields}, ensure_ascii=False), flush=True)
@@ -304,11 +306,16 @@ def guard_group(api, name, group, state, check_only=False):
                 raise RuntimeError("switched outbound did not pass validation")
         state.update(failures=0, last_switch=time.time())
         log("switched", outbound=name, subscription_index=which["sub"], node_id=which["id"], backup=str(before))
-        return True
     except Exception:
         api.call("connection", "POST", current)
         log("switch_rolled_back", outbound=name, backup=str(before))
         raise
+    # Notifications must not roll back an already verified, working proxy.
+    try:
+        notify_switch(api.config, name, current, which, state)
+    except Exception as error:
+        log("notification_error", kind=type(error).__name__)
+    return True
 
 
 def subscription_nodes(body):

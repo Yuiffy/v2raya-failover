@@ -22,6 +22,10 @@ state, lock and backup paths to `/opt/v2raya-failover`, `/etc/v2raya-failover`,
 | `subscription_outbound` | Optional managed outbound for subscription hosts. A separate download group avoids depending on the primary business node. |
 | `refresh_subscription_indices` | Which subscriptions an explicitly requested `--refresh` may update. An empty list disables even manual updates through this tool. |
 | `subscription_refresh_seconds` | `0` in the deployment profile. Installation rejects an automatic interval; change this deliberately only outside this deployment workflow if provider policy calls for it. |
+| `feishu.enabled` | Optional boolean, default `false`. Notify only after a verified node switch. |
+| `feishu.config_file` | Root-owned 0600 JSON with an official HTTPS v2 `webhook` and optional signing `secret`; copied to the installed private directory. |
+| `feishu.instance_name`, `feishu.language` | A label (at most 120 characters) and message language, `zh` or `en`. |
+| `feishu.timeout_seconds` | One delivery attempt, 1–15 seconds, default 5. No automatic retries. |
 
 The full managed block is shown in `install --dry-run`. It covers health-probe hosts and
 configured business domains on `http`, `socks`, `rule-http` and `rule-socks` inbounds. A
@@ -55,6 +59,31 @@ recovery journal before attempting an alternate route. The native subscription u
 format and Bolt reader are version-specific, which is why a v2rayA upgrade needs validation.
 
 ## Troubleshooting and rollback
+
+### Feishu notifications
+
+Use `assets/feishu.example.json` as a template outside the checkout. Set the private
+webhook and optional signing secret on the target, then opt in via the profile. The
+installer validates file permissions and configuration without contacting the bot. It
+copies the private file to `/etc/v2raya-failover/feishu.json`; neither the profile nor a
+dry-run contains the webhook. Existing installations need the updated runtime script
+and its `feishu_notify.py` sibling before enabling this configuration.
+
+The message identifies the instance, outbound, previous/current subscription indices
+and node IDs, server-local timestamp and event ID. It omits node addresses, names,
+subscription URLs, account credentials and webhook details. The fixed text contains
+`v2rayA`; configure custom-bot keyword/IP/signature restrictions accordingly. Signing
+follows the [official custom-bot protocol](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot).
+
+Delivery uses a separate direct HTTPS connection and rejects redirects. A zero business
+code is required, not merely HTTP 200. Notification failures never roll back a verified
+proxy switch. Every event is journaled before POST and attempted at most once; no retry
+is made after timeouts, rejection, or a pending/uncertain result. Inspect the group before
+manually reconciling ambiguous delivery. Each private receipt is kept in
+`/var/lib/v2raya-failover/notifications/<event-id>.json`; summary status is also stored in
+the group's state. These receipts are private and must not be attached to public issues.
+
+### Service rollback
 
 Use `journalctl -u v2raya-failover.service` and the private state file. Logs omit passwords,
 tokens, subscription URLs, response bodies and node addresses. They contain outbound names,

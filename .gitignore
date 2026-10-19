@@ -11,6 +11,8 @@ dist/
 *.key
 auth.json
 *-auth.json
+feishu.json
+*-feishu.json
 config.json
 profile.json
 state.json

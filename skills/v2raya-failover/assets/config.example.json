@@ -9,6 +9,13 @@
   "subscription_refresh_seconds": 0,
   "refresh_subscription_indices": [0],
   "subscription_outbound": "downloads",
+  "feishu": {
+    "enabled": false,
+    "config_file": "/etc/v2raya-failover/operator-feishu.json",
+    "instance_name": "v2rayA",
+    "language": "zh",
+    "timeout_seconds": 5
+  },
   "groups": {
     "proxy": {
       "subscription_indices": [0],

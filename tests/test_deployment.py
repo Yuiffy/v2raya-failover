@@ -1,4 +1,5 @@
 import copy
+import contextlib
 import io
 import json
 import os
@@ -116,6 +117,30 @@ class DeploymentTests(unittest.TestCase):
         self.config["subscription_refresh_seconds"] = 21600
         with self.assertRaises(manage.ConfigurationError):
             manage.validate(self.config, self.api)
+
+    @patch.object(manage, "require_root")
+    @patch.object(watchdog, "LocalAPI")
+    @patch.object(manage.subprocess, "check_output", side_effect=["2.2.7.4\n", "Xray 25.10.15 test\n", "2.2.7.4\n", "Xray 25.10.15 test\n"])
+    @patch.object(watchdog, "backup", return_value="private-backup")
+    @patch.object(watchdog, "run", return_value=True)
+    def test_private_notification_copy_and_no_secret_in_preview(self, run, backup, version, api_class, root):
+        api_class.return_value = self.api
+        credentials = self.root / "operator-feishu.json"
+        webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/test-hook-not-a-real-token"
+        watchdog.write_private(credentials, {"webhook": webhook, "secret": "unit-test-secret"})
+        self.config["feishu"].update(enabled=True, config_file=str(credentials))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            manage.install(self.config, self.root, no_systemd=True, dry_run=True)
+        self.assertNotIn(webhook, output.getvalue())
+        self.assertNotIn("unit-test-secret", output.getvalue())
+        manage.install(self.config, self.root, no_systemd=True)
+        paths = manage.layout(self.root)
+        installed = watchdog.read_private_json(paths["config"])
+        self.assertEqual(installed["feishu"]["config_file"], str(paths["feishu"]))
+        self.assertNotIn("webhook", json.dumps(installed))
+        self.assertEqual(watchdog.read_private_json(paths["feishu"])["webhook"], webhook)
+        self.assertTrue(paths["notifier"].exists())
 
     @patch.object(manage, "require_root")
     @patch.object(watchdog, "LocalAPI")

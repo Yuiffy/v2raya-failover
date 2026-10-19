@@ -1,91 +1,78 @@
 # v2rayA Failover
 
+**English** | [简体中文](README.zh-CN.md)
+
 [![Tests](https://github.com/Yuiffy/v2raya-failover/actions/workflows/test.yml/badge.svg)](https://github.com/Yuiffy/v2raya-failover/actions/workflows/test.yml)
 [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-给 Linux Docker v2rayA + Xray 增加基于真实 HTTPS 请求的节点故障切换。
-**健康时不换节点，默认不自动更新订阅。** 附带可独立安装的 Codex 部署 skill。
+Cached-node failover for Linux Docker deployments of v2rayA and Xray, using real HTTPS health checks.
+**Healthy nodes stay selected. Subscription updates are manual by default.** Optional Feishu switch alerts and a self-contained Codex deployment skill are included.
 
-适合已有 v2rayA、节点订阅和 RoutingA 分流，希望把业务出口、下载出口分别维护的服务器。
-这是服务器本地的定时脚本，不依赖聊天会话、模型 API 或外部调度平台。
+Use it with an existing v2rayA installation, subscription cache and RoutingA configuration to maintain separate business and download outbounds. It runs locally on the server through systemd; no chat session, model API or external scheduler is required.
 
-## 工作方式
+## How it works
 
-1. systemd 在每轮结束约 60 秒后执行下一次检查。
-2. 通过实际代理访问配置中的 HTTPS 地址，检查状态码及可选响应片段。
-3. 连续两轮失败后，从允许的订阅缓存和节点名称范围中筛选替代节点。
-4. 候选先测 TCP，再用临时、只监听回环地址的 Xray 实测，避免拿生产出口轮流试错。
-5. 切换前备份，通过 v2rayA 官方 API 切换，检查两个 HTTP 代理端口；失败尝试回退。
+1. systemd runs the watchdog approximately 60 seconds after the preceding run finishes.
+2. HTTPS probes use the actual proxy and check expected status codes and optional response text.
+3. Two consecutive failed rounds trigger replacement screening within allowed cached subscriptions and node-name prefixes.
+4. Candidates are screened by TCP and tested through temporary Xray processes bound to loopback. The active outbound is not cycled through candidates during testing.
+5. The tool backs up configuration, switches through the official v2rayA API, validates both configured HTTP ports and attempts rollback if validation fails.
+6. If enabled, a verified switch produces one Feishu notification attempt. Notification failure never rolls back the working proxy.
 
-美国业务与香港下载只是示例，可按节点名称、探测地址和国家约束配置。
-目前候选节点仅支持 **VLESS + TCP + Reality**。不宣称兼容其他节点传输协议。
+US business traffic and Hong Kong downloads are examples. Configure your own prefixes, probes and optional country constraint. Candidates currently support **VLESS + TCP + Reality** only.
 
-| 示例检查 | 预期响应 | 验证范围 |
+| Example probe | Expected response | What it verifies |
 |---|---|---|
-| `https://api.openai.com/v1/models` | 未认证请求返回 401 及预期错误信息 | 网络/TLS/HTTP 可达，不调用模型，不验证业务 API key |
-| `https://www.cloudflare.com/cdn-cgi/trace` | 200，`loc=US` | 可选的出口国家约束 |
-| `https://pypi.org/simple/pip/` | 200 | Python 下载入口可达 |
-| `https://registry-1.docker.io/v2/` | Registry 的预期 401 | Docker Registry 入口可达 |
+| `https://api.openai.com/v1/models` | Expected unauthenticated 401 | Network/TLS/HTTP reachability, without a model call or API-key validation |
+| `https://www.cloudflare.com/cdn-cgi/trace` | 200 and `loc=US` | Optional egress-country constraint |
+| `https://pypi.org/simple/pip/` | 200 | Python download entry point |
+| `https://registry-1.docker.io/v2/` | Expected Registry 401 | Docker Registry entry point |
 
-切换会重新加载代理核心，可能中断已有连接；它不是保持连接的负载均衡。
-同一供应商所有缓存节点均失效时，需要其他健康路径或供应商，工具不能凭空恢复网络。
+A switch reloads the proxy core and may interrupt existing connections. This is recovery, not connection-preserving load balancing. If every cached node from a provider fails, another working path or provider is needed.
 
-## 兼容性
+## Compatibility
 
-- Linux、root、Python 3.10+、curl、Docker、systemd。
-- 本版部署器校验 **v2rayA 2.2.7.4**；实际验证的 Xray 为 **25.10.15**。
-- 已有 RoutingA；每个被管理的出站已经选中一个可用节点，并有至少两个受支持的缓存候选。
-- 宿主机能访问管理端口和 HTTP 代理端口。Docker 桥接部署须正确配置端口映射和容器内监听地址。
-- 新版 v2rayA、其他核心、原生 systemd 安装的 v2rayA 均需另行验证。
+- Linux, root, Python 3.10+, curl, Docker and systemd.
+- The installer checks for **v2rayA 2.2.7.4**. The tested Xray version is **25.10.15**.
+- Existing RoutingA, one working selected node per managed outbound and at least two supported cached candidates per group.
+- Management and HTTP proxy ports must be reachable from the host. Bridge-network containers need correct port publishing and listening addresses.
+- New v2rayA versions, other cores and native/non-Docker installations require separate validation.
 
-v2rayA 的该版本对 Xray 每个出站只保留一个连接节点，因此本工具在外围检测并切换。
-实现依赖其版本相关的缓存格式和管理接口；升级 v2rayA 后应先验证。
-依据官方 [连接实现](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/server/service/connect.go)、
-[订阅代理选择](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/common/httpClient/httpClient.go)
-及 [RoutingA 接口](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/server/controller/routingA.go)。
+This v2rayA version keeps only one selected node per outbound when using Xray, so this tool performs switching externally. Cache and management interfaces are version-specific; validate before upgrading.
+See the upstream [connection implementation](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/server/service/connect.go), [subscription proxy selection](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/common/httpClient/httpClient.go) and [RoutingA API](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/server/controller/routingA.go).
 
-## 用 Codex skill 部署
+## Deploy with the Codex skill
 
-仓库内的 [v2raya-failover skill](skills/v2raya-failover/SKILL.md) 自带脚本和模板，安装后无需另外克隆代码。
+The [v2raya-failover skill](skills/v2raya-failover/SKILL.md) includes scripts and templates. An installed skill does not need a separate checkout.
 
-可以在 Codex 中说：
+Ask Codex:
 
-> 请用 skill-installer 从 Yuiffy/v2raya-failover 安装 skills/v2raya-failover。
+> Use skill-installer to install skills/v2raya-failover from Yuiffy/v2raya-failover.
 
-安装后重新加载 skills，再说：
+Reload skills, then ask:
 
-> 使用 $v2raya-failover，检查并部署我的 Linux v2rayA 服务器故障切换，保持订阅手动更新。
+> Use $v2raya-failover to inspect and deploy failover on my Linux v2rayA server, keeping subscription updates manual.
 
-也可以将 `skills/v2raya-failover` 整个目录安装到你的 Codex skills 目录。
-或者从 [Releases](https://github.com/Yuiffy/v2raya-failover/releases) 下载独立的
-`v2raya-failover-skill.zip`，解压后安装其中的 `v2raya-failover` 文件夹；发布页附 SHA-256 校验文件。
-skill 会先核对目标服务器、现有分流、订阅索引、节点范围和认证文件，再预览、部署、验证和准备回退。
+Alternatively, install the complete `skills/v2raya-failover` directory into your Codex skills directory. [Releases](https://github.com/Yuiffy/v2raya-failover/releases) provide a standalone `v2raya-failover-skill.zip` and SHA-256 checksums. Extract and install the enclosed `v2raya-failover` folder.
+The skill inspects the target, current routing, subscription indices, allowed nodes and private authentication file, then previews changes, installs, verifies and prepares rollback.
 
-## 手动部署
+## Manual deployment
 
-以下命令在**目标 Linux 服务器**执行。先调整 v2rayA 的出站和 RoutingA，使所需线路实际可用。
-示例的 `proxy`、`downloads` 和订阅索引 `0` 不代表你的环境；安装器不会擅自创建出站或选节点。
+Run these commands **on the target Linux server**. First make the required existing outbounds and RoutingA routes work. The example's `proxy`, `downloads` and subscription index `0` are placeholders for your environment. The installer does not create outbounds or select nodes.
 
 ```bash
 git clone https://github.com/Yuiffy/v2raya-failover.git
 cd v2raya-failover
 sudo install -d -m 700 /etc/v2raya-failover
 sudo install -m 600 skills/v2raya-failover/assets/config.example.json /etc/v2raya-failover/profile.json
-```
-
-在服务器本地输入 v2rayA 账号密码，验证官方登录并保存私有凭据：
-
-```bash
 sudo python3 skills/v2raya-failover/scripts/manage.py auth \
   --auth-file /etc/v2raya-failover/operator-auth.json \
   --api-url http://127.0.0.1:2017
 ```
 
-默认将登录凭据以明文保存在 root 所有、0600 权限的文件中，不做加密，也不会上传到仓库。
-如果不希望保存密码，可加 `--token-only` 保存官方登录 token，但到期后需续期。
-管理接口仅允许数字回环 HTTP 地址，不通过远程网络传输凭据。
+The authentication command prompts locally and validates the official login. By default it stores plaintext credentials in a root-owned 0600 file; they are not encrypted or uploaded. Use `--token-only` to store an official token instead, but renew it when it expires. Management requests are restricted to a numeric loopback HTTP address.
 
-查看订阅索引及已有出站，然后编辑 profile，匹配实际容器、配置挂载、端口、节点名称及分流：
+Inspect indices/outbounds, edit the profile to match the actual container, mount, ports, nodes and routes, then preview the changes:
 
 ```bash
 sudo python3 skills/v2raya-failover/scripts/manage.py inspect \
@@ -95,7 +82,7 @@ sudo python3 skills/v2raya-failover/scripts/manage.py install \
   --config /etc/v2raya-failover/profile.json --dry-run
 ```
 
-确认计划中的出站、域名和设置正确后安装：
+After reviewing the plan, install and verify:
 
 ```bash
 sudo python3 skills/v2raya-failover/scripts/manage.py install \
@@ -105,58 +92,75 @@ sudo journalctl -u v2raya-failover.service -n 20 --no-pager
 sudo python3 /opt/v2raya-failover/v2raya_failover.py --check
 ```
 
-安装器在 `/var/lib/v2raya-failover/backups/` 保存私有备份，在原 RoutingA 前加入带标记的
-管理规则，保留其他规则，关闭 v2rayA 自带订阅自动更新。初始线路验证失败会中止并尝试恢复原设置。
-查看完整的 [配置及恢复说明](skills/v2raya-failover/references/configuration.md)。
+Private backups are saved under `/var/lib/v2raya-failover/backups/`. Installation prepends a marked RoutingA block, preserves other rules and disables native subscription auto-update. An unhealthy initial route aborts installation and attempts to restore previous settings. See the [configuration and recovery reference](skills/v2raya-failover/references/configuration.md).
 
-## 订阅更新政策
+## Subscription update policy
 
-**默认不定期更新，也不因节点故障自动更新。** 切换使用已保存的节点缓存，两件事互不依赖。
-是否以及何时更新，按订阅厂商说明和你的需要决定。部署器要求 `subscription_refresh_seconds: 0`。
+**No scheduled or fault-triggered subscription updates by default.** Failover uses already cached nodes. Follow your provider's policy and your requirements. Deployment requires `subscription_refresh_seconds: 0`.
 
-只有你明确需要更新时，才执行：
+Only when you explicitly want to refresh:
 
 ```bash
 sudo python3 /opt/v2raya-failover/v2raya_failover.py --refresh
 ```
 
-管理界面的手动更新默认走配置的独立订阅出口。脚本的显式更新还能在该线路失败时尝试直连和
-独立实测的主节点，并在结束后恢复临时分流。它先检查响应不是错误页面且有足够节点，再调用原生更新。
-原生更新会再次请求上游，因此预检不是对两次响应完全相同的保证；备份仍是恢复依据。
+Manual management-UI updates use the configured independent subscription outbound. Explicit script updates can also try direct access and an isolated primary node, restoring temporary routing afterward. Content is prechecked for errors and sufficient node links. The native updater fetches upstream again, so preflight does not guarantee identical responses; backups remain the recovery source.
 
-## 暂停与卸载
+## Feishu switch alerts (optional)
+
+Disabled by default. Alerts are attempted only after a switch completes and both configured HTTP ports pass validation. Healthy checks, a first failed round and rolled-back switches do not send success messages.
+Messages include the instance label, outbound, previous/current subscription indices and node IDs, server time and event ID. They omit node addresses, subscription URLs and credentials. Set `language` to `en` or `zh`.
+
+Create a private bot file on the target:
+
+```bash
+sudo install -m 600 skills/v2raya-failover/assets/feishu.example.json /etc/v2raya-failover/operator-feishu.json
+sudoedit /etc/v2raya-failover/operator-feishu.json
+```
+
+Replace `webhook` with the group's official HTTPS v2 custom-bot webhook. Set `secret` if signature verification is enabled; otherwise leave it empty. Configure keyword/IP restrictions to match your bot: messages contain the fixed keyword `v2rayA`. Never paste the webhook or secret into chat, logs or the repository. Signing follows the [official Feishu custom-bot protocol](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot).
+
+Before installation, opt in through the private profile:
+
+```json
+"feishu": {
+  "enabled": true,
+  "config_file": "/etc/v2raya-failover/operator-feishu.json",
+  "instance_name": "my-server",
+  "language": "en",
+  "timeout_seconds": 5
+}
+```
+
+Installation copies the bot file to `/etc/v2raya-failover/feishu.json` with mode 0600. Dry-run and installation validation do not send test messages. Existing installations need the updated watchdog and its `feishu_notify.py` sibling before configuring `/etc/v2raya-failover/config.json`; editing configuration alone does not upgrade the code.
+
+Delivery uses an independent direct HTTPS connection, ignores system proxy settings and rejects redirects. Both HTTP and business results are checked; HTTP 200 alone is not success. Failed delivery never rolls back a working proxy.
+Each switch event has at most one send attempt. Timeouts or ambiguous outcomes are not retried automatically. Private receipts are stored at `/var/lib/v2raya-failover/notifications/<event-id>.json`; reconcile `pending` and `uncertain` results in the group before taking manual action. Delivery during a network outage is not guaranteed.
+
+## Pause or uninstall
 
 ```bash
 sudo systemctl disable --now v2raya-failover.timer
 sudo systemctl stop v2raya-failover.service
-```
-
-需要移除工具和管理规则时：
-
-```bash
 sudo python3 skills/v2raya-failover/scripts/manage.py uninstall
 ```
 
-卸载保留当前选中的节点及私有配置、认证、状态和备份，恢复尚未被其他操作修改的设置字段，
-移除自己的服务文件和 RoutingA 标记块。重新安装前先检查并归档保留的安装清单，安装器不会覆盖它。
-不要直接覆盖运行中的 Bolt 数据库。
+Removal preserves selected nodes and private configuration, authentication, state and backups. It restores setting fields that still match this tool's applied values, and removes its service files and marked RoutingA block. Inspect and archive the retained installation manifest before reinstalling; it will not be overwritten. Never overwrite a running Bolt database.
 
-## 开发与验证
+## Development and verification
 
-运行时和测试仅依赖 Python 标准库：
+Runtime and tests use only the Python standard library:
 
 ```bash
 python3 -m unittest discover -s tests -v
 python3 -m compileall -q skills/v2raya-failover/scripts
 ```
 
-验证覆盖连续失败阈值、健康时不切换、候选变更、失败回退、官方登录、私有文件权限、
-配置冲突、只读部署预览、安装失败回退、卸载保留用户修改，以及禁用自动订阅更新。
-另外使用隔离的全新 v2rayA 容器验证部署、两组实际故障切换、无自动订阅请求和卸载恢复；
-不在用户正在使用的出站上注入故障。CI 不需要订阅或服务器凭据。
+Tests cover thresholds, node stability, candidate changes, rollback, official login, private-file permissions, configuration conflicts, read-only previews, install rollback, preservation of operator changes, manual-only subscriptions, notification signing/receipts/deduplication, secret protection and notification failure isolation.
+Isolated fresh v2rayA containers validate installation, actual failover of two groups, absence of automatic subscription requests and removal. Notification tests use a mocked bot endpoint, not real groups. CI needs no subscription or server credentials.
 
-不要将真实配置、数据库、订阅链接、密码、token 或运行日志提交到公开仓库。
+Do not submit real configuration, databases, subscription URLs, passwords, tokens or runtime logs to the public repository.
 
 ## License
 
-[MIT](LICENSE)。本项目不打包或分发 v2rayA/Xray 二进制文件。
+[MIT](LICENSE). This project does not bundle or redistribute v2rayA or Xray binaries.

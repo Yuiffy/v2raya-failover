@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 
 import v2raya_failover as watchdog
+import feishu_notify
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 BEGIN = "# BEGIN v2raya-failover managed rules"
@@ -30,8 +31,10 @@ def layout(root):
     root = Path(root).resolve()
     return {
         "runtime": root / "opt/v2raya-failover/v2raya_failover.py",
+        "notifier": root / "opt/v2raya-failover/feishu_notify.py",
         "config": root / "etc/v2raya-failover/config.json",
         "auth": root / "etc/v2raya-failover/auth.json",
+        "feishu": root / "etc/v2raya-failover/feishu.json",
         "manifest": root / "var/lib/v2raya-failover/install-state.json",
         "state": root / "var/lib/v2raya-failover/state.json",
         "backup": root / "var/lib/v2raya-failover/backups",
@@ -62,6 +65,14 @@ def host_of(url):
 
 
 def validate(config, api):
+    notification = config.get("feishu", {})
+    if not isinstance(notification, dict) or not isinstance(notification.get("enabled", False), bool):
+        raise ConfigurationError("feishu.enabled must be a JSON boolean")
+    if notification.get("enabled", False):
+        try:
+            feishu_notify.validate_config(notification)
+        except (OSError, ValueError, KeyError):
+            raise ConfigurationError("Feishu notifications require a valid private custom-bot configuration file") from None
     if config.get("subscription_refresh_seconds", 0) != 0:
         raise ConfigurationError("Deployment defaults to manual-only subscriptions; set interval to 0")
     if config.get("failure_threshold", 2) < 2:
@@ -192,6 +203,7 @@ def install(config, root, no_systemd=False, dry_run=False):
         updates["proxyModeWhenSubscribe"] = "pac"
     if dry_run:
         print(json.dumps({"action": "install_plan", "outbounds": list(config["groups"]), "automatic_subscription_updates": False,
+                          "feishu_notifications": config.get("feishu", {}).get("enabled", False),
                           "setting_changes": updates, "routingA": routing[:routing.index(END) + len(END)], "install_root": str(Path(root).resolve())}, ensure_ascii=False, indent=2))
         return
     installed = copy.deepcopy(config)
@@ -202,9 +214,14 @@ def install(config, root, no_systemd=False, dry_run=False):
     manifest = {"status": "preparing", "previous_setting": previous_setting, "applied_setting": updates, "previous_running": api.call("touch")["running"], "backup": str(before), "systemd": not no_systemd}
     watchdog.write_private(paths["manifest"], manifest)
     watchdog.write_private(paths["auth"], watchdog.read_private_json(config["auth_file"]))
+    if installed.get("feishu", {}).get("enabled", False):
+        watchdog.write_private(paths["feishu"], feishu_notify.validate_config(config["feishu"]))
+        installed["feishu"]["config_file"] = str(paths["feishu"])
     watchdog.write_private(paths["config"], installed)
     shutil.copyfile(Path(__file__).with_name("v2raya_failover.py"), paths["runtime"])
     paths["runtime"].chmod(0o700)
+    shutil.copyfile(Path(__file__).with_name("feishu_notify.py"), paths["notifier"])
+    paths["notifier"].chmod(0o700)
     try:
         api.call("routingA", "PUT", {"routingA": routing})
         api.call("setting", "PUT", {**previous_setting, **updates})
@@ -246,7 +263,7 @@ def uninstall(root, no_systemd=False):
     api = watchdog.LocalAPI(config)
     watchdog.restore_subscription_override(api)
     restore_native(api, manifest)
-    for key in ("service", "timer", "runtime"):
+    for key in ("service", "timer", "runtime", "notifier"):
         paths[key].unlink(missing_ok=True)
     if not no_systemd:
         systemctl("daemon-reload")
