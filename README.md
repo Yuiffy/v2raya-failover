@@ -57,6 +57,8 @@ v2rayA 的该版本对 Xray 每个出站只保留一个连接节点，因此本�
 > 使用 $v2raya-failover，检查并部署我的 Linux v2rayA 服务器故障切换，保持订阅手动更新。
 
 也可以将 `skills/v2raya-failover` 整个目录安装到你的 Codex skills 目录。
+或者从 [Releases](https://github.com/Yuiffy/v2raya-failover/releases) 下载独立的
+`v2raya-failover-skill.zip`，解压后安装其中的 `v2raya-failover` 文件夹；发布页附 SHA-256 校验文件。
 skill 会先核对目标服务器、现有分流、订阅索引、节点范围和认证文件，再预览、部署、验证和准备回退。
 
 ## 手动部署
