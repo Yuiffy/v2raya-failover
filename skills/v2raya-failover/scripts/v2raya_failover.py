@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Server-local v2rayA 2.2.7.4/Xray failover; Python standard library only.
+"""Server-local v2rayA/Xray failover; Python standard library only.
 
 Reads the root-only Bolt database for cached nodes. Authentication uses the
 official login API or an operator-provided token. All mutations use the API.
@@ -82,6 +82,27 @@ def read_bolt(path):
             time.sleep(0.1)
 
 
+def bolt_database_path(data_dir):
+    """Return the readable Bolt snapshot across the v2rayA 2.5 migration.
+
+    v2rayA 2.5 stores its live state in SQLite and keeps the old Bolt file as
+    ``bolt.db.bak``.  The watchdog only reads the cached subscriptions from
+    Bolt, so prefer a valid Bolt file and never parse the SQLite database.
+    """
+    directory = Path(data_dir)
+    candidates = [directory / "bolt.db", directory / "bolt.db.bak"]
+    for candidate in candidates:
+        try:
+            with candidate.open("rb") as stream:
+                header = stream.read(16)
+        except FileNotFoundError:
+            continue
+        if header.startswith(b"SQLite format 3"):
+            continue
+        return candidate
+    raise FileNotFoundError("no v2rayA Bolt cache found (checked bolt.db and bolt.db.bak)")
+
+
 class LocalAPI:
     def __init__(self, config):
         self.config = config
@@ -98,7 +119,7 @@ class LocalAPI:
         self.reload()
 
     def reload(self):
-        self.records = read_bolt(Path(self.config["data_dir"]) / "bolt.db")
+        self.records = read_bolt(bolt_database_path(self.config["data_dir"]))
         self.subs = json.loads(self.records[("touch", "subscriptions")])
 
     def call(self, path, method="GET", body=None):
@@ -132,7 +153,7 @@ def curl(url, proxy, timeout=8):
     """Pass URLs via stdin so subscription tokens never appear in process args."""
     args = ["curl", "-sS", "-L", "--proto", "=https", "--proto-redir", "=https",
             "--connect-timeout", "4", "--max-time", str(timeout), "--max-filesize", "2097152",
-            "-A", "v2rayA/2.2.7.4 WebRequestHelper", "--config", "-",
+            "-A", "v2rayA WebRequestHelper", "--config", "-",
             "-w", "\nWATCHDOG %{http_code} %{time_total}"]
     args += ["--proxy", proxy, "--noproxy", ""] if proxy else ["--noproxy", "*"]
     result = subprocess.run(args, input="url = " + json.dumps(url) + "\n", text=True, capture_output=True, timeout=timeout + 3)
@@ -182,7 +203,12 @@ def isolated_config(node, port):
 @contextlib.contextmanager
 def isolated_proxy(config, node):
     pid = subprocess.check_output(["docker", "inspect", "-f", "{{.State.Pid}}", config["container"]], text=True, timeout=10).strip()
-    executable = f"/proc/{int(pid)}/root/usr/local/bin/xray"
+    container_root = Path(f"/proc/{int(pid)}/root")
+    executable = next((str(container_root / path) for path in
+                       ("usr/bin/v2raya_core", "usr/local/bin/xray")
+                       if (container_root / path).is_file()), None)
+    if executable is None:
+        raise RuntimeError("no v2rayA core executable found in the container")
     with tempfile.TemporaryDirectory(prefix="v2raya-failover-") as directory:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
@@ -260,9 +286,19 @@ def backup(config, api):
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = root / (time.strftime("%Y%m%d-%H%M%S") + "-" + str(time.time_ns()))
     path.mkdir(mode=0o700)
-    for name in ("bolt.db", "config.json"):
-        shutil.copy2(Path(config["data_dir"]) / name, path / name)
+    data_dir = Path(config["data_dir"])
+    names = {"config.json", "bolt.db", "bolt.db.bak"}
+    names.update(p.name for p in data_dir.glob("v2raya.db*"))
+    copied = 0
+    for name in sorted(names):
+        source = data_dir / name
+        if not source.is_file():
+            continue
+        shutil.copy2(source, path / name)
         (path / name).chmod(0o600)
+        copied += 1
+    if not copied:
+        raise FileNotFoundError("v2rayA data directory contains no backup candidates")
     (path / "before-api.json").write_text(json.dumps({"touch": api.call("touch")["touch"]["connectedServer"], "setting": api.call("setting"), "routingA": api.call("routingA")}))
     (path / "before-api.json").chmod(0o600)
     return path

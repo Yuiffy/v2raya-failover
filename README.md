@@ -33,13 +33,14 @@ A switch reloads the proxy core and may interrupt existing connections. This is 
 ## Compatibility
 
 - Linux, root, Python 3.10+, curl, Docker and systemd.
-- The installer checks for **v2rayA 2.2.7.4**. The tested Xray version is **25.10.15**.
+- The installer checks for **v2rayA 2.2.7.4**, **2.2.7.5** and **2.5.10**. The tested cores are
+  **Xray 25.10.15** (2.2.x) and **v2raya_core 2.5.10 / Xray 26.7.28** (2.5.x).
 - Existing RoutingA, one working selected node per managed outbound and at least two supported cached candidates per group.
 - Management and HTTP proxy ports must be reachable from the host. Bridge-network containers need correct port publishing and listening addresses.
 - New v2rayA versions, other cores and native/non-Docker installations require separate validation.
 
 This v2rayA version keeps only one selected node per outbound when using Xray, so this tool performs switching externally. Cache and management interfaces are version-specific; validate before upgrading.
-See the upstream [connection implementation](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/server/service/connect.go), [subscription proxy selection](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/common/httpClient/httpClient.go) and [RoutingA API](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/server/controller/routingA.go).
+See the upstream [connection implementation](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/server/service/connect.go), [subscription proxy selection](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/common/httpClient/httpClient.go) and [RoutingA API](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/server/controller/routingA.go). v2rayA 2.5 migration leaves the readable Bolt cache at `bolt.db.bak` while the live database is SQLite; the watchdog detects that layout and uses the container's `/usr/bin/v2raya_core` before the legacy Xray path.
 
 ## Deploy with the Codex skill
 

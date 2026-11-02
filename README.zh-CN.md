@@ -35,16 +35,18 @@
 ## 兼容性
 
 - Linux、root、Python 3.10+、curl、Docker、systemd。
-- 本版部署器校验 **v2rayA 2.2.7.4**；实际验证的 Xray 为 **25.10.15**。
+- 本版部署器校验 **v2rayA 2.2.7.4、2.2.7.5** 和 **2.5.10**；已验证的核心分别为
+  **Xray 25.10.15**（2.2.x）及 **v2raya_core 2.5.10 / Xray 26.7.28**（2.5.x）。
 - 已有 RoutingA；每个被管理的出站已经选中一个可用节点，并有至少两个受支持的缓存候选。
 - 宿主机能访问管理端口和 HTTP 代理端口。Docker 桥接部署须正确配置端口映射和容器内监听地址。
-- 新版 v2rayA、其他核心、原生 systemd 安装的 v2rayA 均需另行验证。
+- 其他新版 v2rayA、其他核心、原生 systemd 安装的 v2rayA 均需另行验证。
 
 v2rayA 的该版本对 Xray 每个出站只保留一个连接节点，因此本工具在外围检测并切换。
 实现依赖其版本相关的缓存格式和管理接口；升级 v2rayA 后应先验证。
 依据官方 [连接实现](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/server/service/connect.go)、
 [订阅代理选择](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/common/httpClient/httpClient.go)
 及 [RoutingA 接口](https://github.com/v2rayA/v2rayA/blob/v2.2.7.4/service/server/controller/routingA.go)。
+v2rayA 2.5 迁移后运行中的数据库为 SQLite，旧的可读 Bolt 缓存通常保留为 `bolt.db.bak`；脚本会自动识别该布局，并优先使用容器内的 `/usr/bin/v2raya_core`，再回退到旧 Xray 路径。
 
 ## 用 Codex skill 部署
 

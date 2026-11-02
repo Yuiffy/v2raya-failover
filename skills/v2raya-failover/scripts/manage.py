@@ -27,6 +27,34 @@ class ConfigurationError(ValueError):
     pass
 
 
+SUPPORTED_V2RAYA_VERSIONS = {"2.2.7.4", "2.2.7.5", "2.5.10"}
+
+
+def docker_output(container, *command):
+    return subprocess.check_output(["docker", "exec", container, *command], text=True, timeout=10).strip()
+
+
+def v2raya_version(container):
+    output = docker_output(container, "v2raya", "--version")
+    match = re.search(r"\b(\d+\.\d+\.\d+(?:\.\d+)?)\b", output)
+    return match.group(1) if match else output
+
+
+def core_version(container):
+    errors = []
+    for executable in ("v2raya_core", "xray"):
+        try:
+            output = docker_output(container, executable, "version")
+        except (OSError, subprocess.CalledProcessError) as error:
+            errors.append(error)
+            continue
+        first = output.splitlines()[0] if output else ""
+        if first.startswith("Xray ") or "v2raya_core" in first or re.search(r"\bXray\b", output):
+            return first
+        errors.append(ConfigurationError("unexpected core version output"))
+    raise ConfigurationError("An Xray/v2raya_core core is required") from errors[-1] if errors else None
+
+
 def layout(root):
     root = Path(root).resolve()
     return {
@@ -111,12 +139,11 @@ def validate(config, api):
             raise ConfigurationError("A manual-refresh subscription index is out of range")
     if api.call("setting")["setting"]["pacMode"] != "routingA":
         raise ConfigurationError("Set up and verify RoutingA before installing; other routing modes are not migrated")
-    version = subprocess.check_output(["docker", "exec", config["container"], "v2raya", "--version"], text=True, timeout=10).strip()
-    if version != "2.2.7.4":
-        raise ConfigurationError("This release supports v2rayA 2.2.7.4; validate a new version before using it")
-    core = subprocess.check_output(["docker", "exec", config["container"], "xray", "version"], text=True, timeout=10).splitlines()[0]
-    if not core.startswith("Xray "):
-        raise ConfigurationError("An Xray core is required")
+    version = v2raya_version(config["container"])
+    if version not in SUPPORTED_V2RAYA_VERSIONS:
+        supported = ", ".join(sorted(SUPPORTED_V2RAYA_VERSIONS))
+        raise ConfigurationError("This release supports v2rayA " + supported + "; validate a new version before using it")
+    core_version(config["container"])
 
 
 def planned_routing(config, api, previous):

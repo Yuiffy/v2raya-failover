@@ -7,7 +7,7 @@ state, lock and backup paths to `/opt/v2raya-failover`, `/etc/v2raya-failover`,
 
 | Field | Meaning |
 |---|---|
-| `container`, `data_dir` | Existing Docker container and host directory containing `bolt.db` and `config.json`. No database writes are performed. |
+| `container`, `data_dir` | Existing Docker container and host directory containing `config.json` and the v2rayA cache. v2rayA 2.2 uses `bolt.db`; v2rayA 2.5 may keep the old readable cache as `bolt.db.bak` beside a SQLite `bolt.db`. The watchdog reads the Bolt cache only and never writes either database. |
 | `api_url` | Numeric loopback HTTP URL on the same host, such as `http://127.0.0.1:2017`. Remote management endpoints are rejected. |
 | `auth_file` | Private official login JSON (`username`, `password`) or an official `token`. Tokens expire; login credentials let each short run authenticate again. |
 | `proxy_url` | Existing rule-aware HTTP proxy used for live health checks, commonly port 20172. |
@@ -56,7 +56,7 @@ update. It rejects HTTP errors, HTML and fewer than five node links. The upstrea
 fetched again by v2rayA, so preflight is not an atomic guarantee about a changing upstream
 response; private backups remain the recovery source. It preserves a temporary-route
 recovery journal before attempting an alternate route. The native subscription update
-format and Bolt reader are version-specific, which is why a v2rayA upgrade needs validation.
+format and Bolt reader are version-specific, which is why a v2rayA upgrade needs validation. The supported migration layout is v2rayA 2.5.10 with SQLite live state, `bolt.db.bak` cache fallback, and `/usr/bin/v2raya_core` inside the official container.
 
 ## Troubleshooting and rollback
 

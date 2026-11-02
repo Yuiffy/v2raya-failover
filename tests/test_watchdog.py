@@ -19,7 +19,7 @@ class FailoverTests(unittest.TestCase):
         self.node = {"protocol": "vless", "net": "tcp", "tls": "reality", "add": "node.invalid", "port": 443,
                      "id": "test-id", "pbk": "test-public-key", "sni": "example.org"}
         self.api = Mock()
-        self.api.config = {"proxy_url": "http://127.0.0.1:20172", "failure_threshold": 2, "verify_ports": [20171, 20172],
+        self.api.config = {"container": "v2raya", "proxy_url": "http://127.0.0.1:20172", "failure_threshold": 2, "verify_ports": [20171, 20172],
                            "state_file": str(Path(temporary.name) / "state.json")}
         self.api.subs = [{"servers": [{"serverObj": {}}, {"serverObj": self.node}]}]
         self.api.call.return_value = {"touch": {"connectedServer": [self.current]}}
@@ -186,6 +186,21 @@ class FailoverTests(unittest.TestCase):
         self.assertFalse(watchdog.supported(node))
         with self.assertRaises(ValueError):
             watchdog.isolated_config(node, 24300)
+
+    def test_bolt_cache_falls_back_from_sqlite_migration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "bolt.db").write_bytes(b"SQLite format 3\x00" + b"x" * 32)
+            (root / "bolt.db.bak").write_bytes(b"bolt-cache")
+            self.assertEqual(watchdog.bolt_database_path(root), root / "bolt.db.bak")
+
+    @patch.object(watchdog.subprocess, "check_output", return_value="123\n")
+    @patch.object(watchdog.Path, "is_file", return_value=True)
+    @patch.object(watchdog.subprocess, "Popen", side_effect=FileNotFoundError)
+    def test_isolated_proxy_prefers_v2raya_core_path(self, popen, _, inspect):
+        with self.assertRaises(FileNotFoundError):
+            watchdog.isolated_proxy(self.api.config, self.node).__enter__()
+        self.assertIn("usr\\bin\\v2raya_core", str(popen.call_args.args[0][0]))
 
 
 if __name__ == "__main__":

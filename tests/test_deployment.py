@@ -22,7 +22,7 @@ class AuthenticationTests(unittest.TestCase):
             config = {"api_url": "http://127.0.0.1:2017", "auth_file": str(path), "data_dir": directory}
             opener = Mock()
             opener.open.return_value = io.BytesIO(json.dumps({"code": "SUCCESS", "data": {"token": "test-official-token"}}).encode())
-            with patch.object(watchdog, "read_bolt", return_value={("touch", "subscriptions"): b"[]"}), patch.object(watchdog.urllib.request, "build_opener", return_value=opener):
+            with patch.object(watchdog, "bolt_database_path", return_value=Path(directory) / "bolt.db"), patch.object(watchdog, "read_bolt", return_value={("touch", "subscriptions"): b"[]"}), patch.object(watchdog.urllib.request, "build_opener", return_value=opener):
                 api = watchdog.LocalAPI(config)
             self.assertEqual(api.token, "test-official-token")
             request = opener.open.call_args.args[0]
@@ -47,6 +47,11 @@ class AuthenticationTests(unittest.TestCase):
         with patch.object(watchdog, "curl", return_value=(0, "200", "loc=JP\n", 1)):
             self.assertTrue(watchdog.healthy("http://127.0.0.1:1234", {"probes": [], "require_country": "JP"})[0])
             self.assertFalse(watchdog.healthy("http://127.0.0.1:1234", {"probes": [], "require_country": "US"})[0])
+
+    def test_v2raya_25_and_v2raya_core_are_supported(self):
+        with patch.object(manage, "docker_output", side_effect=["v2rayA 2.5.10\n", "v2raya_core 2.5.10\n"]):
+            self.assertEqual(manage.v2raya_version("v2raya"), "2.5.10")
+            self.assertIn("v2raya_core", manage.core_version("v2raya"))
 
 
 class DeploymentTests(unittest.TestCase):
