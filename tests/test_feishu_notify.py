@@ -167,7 +167,7 @@ class SwitchNotificationTests(unittest.TestCase):
         candidate.return_value = self.which, self.node
         self.assertTrue(watchdog.guard_group(self.api, "proxy", {}, {"failures": 1}))
         writes = [call.args for call in self.api.call.call_args_list if len(call.args) > 1]
-        self.assertEqual(writes, [("connection", "POST", self.which)])
+        self.assertEqual(writes, [("outboundConnections", "PUT", {"outbound": "proxy", "touches": [self.which]})])
 
     @patch.object(watchdog, "notify_switch")
     @patch.object(watchdog, "backup", return_value="private-backup")

@@ -54,7 +54,7 @@ class FailoverTests(unittest.TestCase):
         self.assertTrue(watchdog.guard_group(self.api, "proxy", {}, state))
         writes = [call for call in self.api.call.call_args_list if len(call.args) > 1]
         self.assertEqual(len(writes), 1)
-        self.assertEqual(writes[0].args, ("connection", "POST", self.which))
+        self.assertEqual(writes[0].args, ("outboundConnections", "PUT", {"outbound": "proxy", "touches": [self.which]}))
         self.assertEqual(state["failures"], 0)
 
     @patch.object(watchdog, "backup", return_value="backup")
@@ -65,7 +65,7 @@ class FailoverTests(unittest.TestCase):
         candidate.return_value = self.which, self.node
         with self.assertRaises(RuntimeError):
             watchdog.guard_group(self.api, "proxy", {}, {"failures": 1})
-        self.assertEqual(self.api.call.call_args.args, ("connection", "POST", self.current))
+        self.assertEqual(self.api.call.call_args.args, ("outboundConnections", "PUT", {"outbound": "proxy", "touches": [self.current]}))
 
     @patch.object(watchdog, "best_candidate", return_value=None)
     @patch.object(watchdog, "healthy", return_value=(False, 8))

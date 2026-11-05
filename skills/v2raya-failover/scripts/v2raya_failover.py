@@ -304,6 +304,24 @@ def backup(config, api):
     return path
 
 
+def replace_connection(api, which):
+    """Replace an outbound's members on v2rayA 2.5, with a legacy fallback.
+
+    v2rayA 2.5's legacy connection endpoint appends another member to the
+    outbound.  The replacement endpoint keeps the failover invariant of one
+    managed member and avoids leaving a least-ping balancer with stale nodes.
+    """
+    try:
+        api.call(
+            "outboundConnections",
+            "PUT",
+            {"outbound": which["outbound"], "touches": [which]},
+        )
+    except RuntimeError:
+        # v2rayA 2.2 does not expose outboundConnections yet.
+        api.call("connection", "POST", which)
+
+
 def guard_group(api, name, group, state, check_only=False):
     proxy = api.config["proxy_url"]
     ok, _ = healthy(proxy, group)
@@ -336,14 +354,14 @@ def guard_group(api, name, group, state, check_only=False):
         return True
     before = backup(api.config, api)
     try:
-        api.call("connection", "POST", which)
+        replace_connection(api, which)
         for port in api.config["verify_ports"]:
             if not healthy("http://127.0.0.1:" + str(port), group)[0]:
                 raise RuntimeError("switched outbound did not pass validation")
         state.update(failures=0, last_switch=time.time())
         log("switched", outbound=name, subscription_index=which["sub"], node_id=which["id"], backup=str(before))
     except Exception:
-        api.call("connection", "POST", current)
+        replace_connection(api, current)
         log("switch_rolled_back", outbound=name, backup=str(before))
         raise
     # Notifications must not roll back an already verified, working proxy.
