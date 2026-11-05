@@ -237,7 +237,7 @@ class FailoverTests(unittest.TestCase):
     def test_isolated_proxy_prefers_v2raya_core_path(self, popen, _, inspect):
         with self.assertRaises(FileNotFoundError):
             watchdog.isolated_proxy(self.api.config, self.node).__enter__()
-        self.assertIn("usr\\bin\\v2raya_core", str(popen.call_args.args[0][0]))
+        self.assertEqual(Path(popen.call_args.args[0][0]).parts[-3:], ("usr", "bin", "v2raya_core"))
 
 
 if __name__ == "__main__":
