@@ -150,10 +150,10 @@ def read_private_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def curl(url, proxy, timeout=8):
+def curl(url, proxy, timeout=8, connect_timeout=4):
     """Pass URLs via stdin so subscription tokens never appear in process args."""
     args = ["curl", "-sS", "-L", "--proto", "=https", "--proto-redir", "=https",
-            "--connect-timeout", "4", "--max-time", str(timeout), "--max-filesize", "2097152",
+            "--connect-timeout", str(connect_timeout), "--max-time", str(timeout), "--max-filesize", "2097152",
             "-A", "v2rayA WebRequestHelper", "--config", "-",
             "-w", "\nWATCHDOG %{http_code} %{time_total}"]
     args += ["--proxy", proxy, "--noproxy", ""] if proxy else ["--noproxy", "*"]
@@ -165,14 +165,16 @@ def curl(url, proxy, timeout=8):
 
 def healthy(proxy, group):
     total = 0.0
+    timeout = group.get("probe_timeout_seconds", 8)
+    connect_timeout = group.get("probe_connect_timeout_seconds", 4)
     for probe in group["probes"]:
-        rc, status, body, elapsed = curl(probe["url"], proxy)
+        rc, status, body, elapsed = curl(probe["url"], proxy, timeout=timeout, connect_timeout=connect_timeout)
         total += elapsed
         if rc or status != str(probe["status"]) or (probe.get("contains") and probe["contains"] not in body):
             return False, total
     country = group.get("require_country") or ("US" if group.get("require_us") else None)
     if country:
-        rc, status, body, elapsed = curl("https://www.cloudflare.com/cdn-cgi/trace", proxy)
+        rc, status, body, elapsed = curl("https://www.cloudflare.com/cdn-cgi/trace", proxy, timeout=timeout, connect_timeout=connect_timeout)
         total += elapsed
         if rc or status != "200" or "loc=" + country not in body.splitlines():
             return False, total

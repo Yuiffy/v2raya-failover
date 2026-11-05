@@ -18,6 +18,8 @@ state, lock and backup paths to `/opt/v2raya-failover`, `/etc/v2raya-failover`,
 | `name_prefixes` | Allowed beginnings of node display names. Candidates must also use VLESS TCP Reality. |
 | `require_country` | Optional uppercase two-letter country code, checked using Cloudflare trace. Use only when required for the user's service. |
 | `probes` | HTTPS URL, expected HTTP status, optional required response substring. All probes for a group must pass. |
+| `probe_timeout_seconds` | Per-HTTPS-probe timeout, from 4 to 30 seconds; default 8. Use a measured value for high-latency providers. |
+| `probe_connect_timeout_seconds` | Connection/TLS timeout within each probe, from 1 second to the total probe timeout; default 4. |
 | `routing_domains` | Optional domain suffixes routed to the group, including subdomains. Existing unrelated RoutingA rules remain after the marked block. |
 | `subscription_outbound` | Optional managed outbound for subscription hosts. A separate download group avoids depending on the primary business node. |
 | `refresh_subscription_indices` | Which subscriptions an explicitly requested `--refresh` may update. An empty list disables even manual updates through this tool. |

@@ -33,8 +33,8 @@ A switch reloads the proxy core and may interrupt existing connections. This is 
 ## Compatibility
 
 - Linux, root, Python 3.10+, curl, Docker and systemd.
-- The installer checks for **v2rayA 2.2.5.1**, **2.2.7.4**, **2.2.7.5** and **2.5.10**. The tested cores are
-  **Xray 1.8.8**, **25.10.15**, **26.1.23** (2.2.x) and **v2raya_core 2.5.10 / Xray 26.7.28** (2.5.x).
+- The installer checks for **v2rayA 2.2.5.1**, **2.2.6.7**, **2.2.7.4**, **2.2.7.5** and **2.5.10**. The tested cores are
+  **Xray 1.8.8**, **25.3.6**, **25.10.15**, **26.1.23** (2.2.x) and **v2raya_core 2.5.10 / Xray 26.7.28** (2.5.x).
 - The installer checks the running core and its version; an unused installed Xray is insufficient. Confirm that v2rayA actually launches Xray before using Reality nodes.
 - Existing RoutingA, one working selected node per managed outbound and at least two supported cached candidates per group.
 - Management and HTTP proxy ports must be reachable from the host. Bridge-network containers need correct port publishing and listening addresses.

@@ -48,6 +48,24 @@ class AuthenticationTests(unittest.TestCase):
             self.assertTrue(watchdog.healthy("http://127.0.0.1:1234", {"probes": [], "require_country": "JP"})[0])
             self.assertFalse(watchdog.healthy("http://127.0.0.1:1234", {"probes": [], "require_country": "US"})[0])
 
+    def test_probe_timeouts_reach_business_and_country_requests(self):
+        group = {"probe_timeout_seconds": 15, "probe_connect_timeout_seconds": 10,
+                 "probes": [{"url": "https://service.example/health", "status": 204}], "require_country": "US"}
+        with patch.object(watchdog, "curl", side_effect=[(0, "204", "", 2), (0, "200", "loc=US\n", 3)]) as curl:
+            self.assertEqual(watchdog.healthy("http://127.0.0.1:1234", group), (True, 5))
+        self.assertEqual(curl.call_count, 2)
+        for call in curl.call_args_list:
+            self.assertEqual(call.kwargs, {"timeout": 15, "connect_timeout": 10})
+
+    def test_curl_uses_configured_timeout_limits(self):
+        result = Mock(returncode=0, stdout="ok\nWATCHDOG 200 9.5")
+        with patch.object(watchdog.subprocess, "run", return_value=result) as run:
+            self.assertEqual(watchdog.curl("https://service.example/health", None, timeout=15, connect_timeout=10), (0, "200", "ok", 9.5))
+        args = run.call_args.args[0]
+        self.assertEqual(args[args.index("--connect-timeout") + 1], "10")
+        self.assertEqual(args[args.index("--max-time") + 1], "15")
+        self.assertEqual(run.call_args.kwargs["timeout"], 18)
+
     def test_v2raya_25_and_v2raya_core_are_supported(self):
         with patch.object(manage, "docker_output", side_effect=["v2rayA 2.5.10\n", "v2raya_core 2.5.10\n"]), patch.object(manage.subprocess, "check_output", return_value="PID COMMAND\n101 /usr/bin/v2raya_core run -c /etc/v2raya/config.json\n"):
             self.assertEqual(manage.v2raya_version("v2raya"), "2.5.10")
@@ -139,8 +157,28 @@ class DeploymentTests(unittest.TestCase):
         with self.assertRaises(manage.ConfigurationError):
             manage.validate(self.config, self.api)
 
+    def test_invalid_probe_timeouts_are_rejected(self):
+        invalid = [("probe_timeout_seconds", x) for x in (True, "15", 3, 31, float("nan"))]
+        invalid += [("probe_connect_timeout_seconds", x) for x in (True, "4", 0, 9, float("nan"))]
+        for key, value in invalid:
+            with self.subTest(key=key, value=value):
+                config = copy.deepcopy(self.config)
+                config["groups"]["proxy"][key] = value
+                with self.assertRaisesRegex(manage.ConfigurationError, key):
+                    manage.validate(config, self.api)
+
+    @patch.object(manage, "v2raya_version", return_value="2.2.6.7")
+    @patch.object(manage, "core_version", return_value="Xray 25.3.6")
+    def test_longer_probe_timeouts_are_accepted(self, core, version):
+        self.config["groups"]["proxy"].update(probe_timeout_seconds=15, probe_connect_timeout_seconds=10)
+        manage.validate(self.config, self.api)
+
     @patch.object(manage.subprocess, "check_output", side_effect=["2.2.5.1\n", "PID COMMAND\n101 /usr/local/bin/xray run -c /etc/v2raya/config.json\n", "Xray 1.8.8 test\n"])
     def test_verified_legacy_v2raya_and_core_are_accepted(self, _):
+        manage.validate(self.config, self.api)
+
+    @patch.object(manage.subprocess, "check_output", side_effect=["2.2.6.7\n", "PID COMMAND\n101 /usr/local/bin/xray run -c /etc/v2raya/config.json\n", "Xray 25.3.6 test\n"])
+    def test_verified_v2raya_2267_and_core_are_accepted(self, _):
         manage.validate(self.config, self.api)
 
     @patch.object(manage, "require_root")

@@ -28,7 +28,7 @@ class ConfigurationError(ValueError):
     pass
 
 
-SUPPORTED_V2RAYA_VERSIONS = {"2.2.5.1", "2.2.7.4", "2.2.7.5", "2.5.10"}
+SUPPORTED_V2RAYA_VERSIONS = {"2.2.5.1", "2.2.6.7", "2.2.7.4", "2.2.7.5", "2.5.10"}
 
 
 def docker_output(container, *command):
@@ -137,6 +137,12 @@ def validate(config, api):
                 raise ConfigurationError("Health probes must use HTTPS")
             if not 100 <= int(probe["status"]) <= 599:
                 raise ConfigurationError("Invalid expected HTTP status")
+        timeout = group.get("probe_timeout_seconds", 8)
+        if type(timeout) not in (int, float) or not 4 <= timeout <= 30:
+            raise ConfigurationError("probe_timeout_seconds must be between 4 and 30")
+        connect_timeout = group.get("probe_connect_timeout_seconds", 4)
+        if type(connect_timeout) not in (int, float) or not 1 <= connect_timeout <= timeout:
+            raise ConfigurationError("probe_connect_timeout_seconds must be between 1 and probe_timeout_seconds")
     if config.get("subscription_outbound") and config["subscription_outbound"] not in config["groups"]:
         raise ConfigurationError("subscription_outbound must name a managed group")
     for index in config.get("refresh_subscription_indices", []):
