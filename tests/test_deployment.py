@@ -49,9 +49,25 @@ class AuthenticationTests(unittest.TestCase):
             self.assertFalse(watchdog.healthy("http://127.0.0.1:1234", {"probes": [], "require_country": "US"})[0])
 
     def test_v2raya_25_and_v2raya_core_are_supported(self):
-        with patch.object(manage, "docker_output", side_effect=["v2rayA 2.5.10\n", "v2raya_core 2.5.10\n"]):
+        with patch.object(manage, "docker_output", side_effect=["v2rayA 2.5.10\n", "v2raya_core 2.5.10\n"]), patch.object(manage.subprocess, "check_output", return_value="PID COMMAND\n101 /usr/bin/v2raya_core run -c /etc/v2raya/config.json\n"):
             self.assertEqual(manage.v2raya_version("v2raya"), "2.5.10")
             self.assertIn("v2raya_core", manage.core_version("v2raya"))
+
+    def test_unused_xray_does_not_mask_running_v2ray(self):
+        with patch.object(manage.subprocess, "check_output", return_value="PID COMMAND\n100 v2raya\n101 /usr/local/bin/v2ray run --config=/etc/v2raya/config.json\n"), patch.object(manage, "docker_output", return_value="V2Ray 5.44.1\n") as version:
+            with self.assertRaisesRegex(manage.ConfigurationError, "running proxy core"):
+                manage.core_version("v2raya")
+        version.assert_called_once_with("v2raya", "/usr/local/bin/v2ray", "version")
+
+    def test_missing_running_core_is_rejected(self):
+        with patch.object(manage.subprocess, "check_output", return_value="PID COMMAND\n100 v2raya\n"):
+            with self.assertRaisesRegex(manage.ConfigurationError, "Exactly one"):
+                manage.core_version("v2raya")
+
+    def test_ambiguous_running_cores_are_rejected(self):
+        with patch.object(manage.subprocess, "check_output", return_value="PID COMMAND\n100 v2raya\n101 /usr/local/bin/xray run -c config.json\n102 /usr/local/bin/xray run -c diagnostic.json\n"):
+            with self.assertRaisesRegex(manage.ConfigurationError, "Exactly one"):
+                manage.core_version("v2raya")
 
 
 class DeploymentTests(unittest.TestCase):
@@ -110,7 +126,7 @@ class DeploymentTests(unittest.TestCase):
 
     @patch.object(manage, "require_root")
     @patch.object(watchdog, "LocalAPI")
-    @patch.object(manage.subprocess, "check_output", side_effect=["2.2.7.4\n", "Xray 25.10.15 test\n"])
+    @patch.object(manage.subprocess, "check_output", side_effect=["2.2.7.4\n", "PID COMMAND\n101 /usr/local/bin/xray run -c /etc/v2raya/config.json\n", "Xray 25.10.15 test\n"])
     def test_dry_run_has_no_file_or_api_mutations(self, _, api_class, root):
         api_class.return_value = self.api
         before = sorted(str(p) for p in self.root.rglob("*"))
@@ -123,9 +139,13 @@ class DeploymentTests(unittest.TestCase):
         with self.assertRaises(manage.ConfigurationError):
             manage.validate(self.config, self.api)
 
+    @patch.object(manage.subprocess, "check_output", side_effect=["2.2.5.1\n", "PID COMMAND\n101 /usr/local/bin/xray run -c /etc/v2raya/config.json\n", "Xray 1.8.8 test\n"])
+    def test_verified_legacy_v2raya_and_core_are_accepted(self, _):
+        manage.validate(self.config, self.api)
+
     @patch.object(manage, "require_root")
     @patch.object(watchdog, "LocalAPI")
-    @patch.object(manage.subprocess, "check_output", side_effect=["2.2.7.4\n", "Xray 25.10.15 test\n", "2.2.7.4\n", "Xray 25.10.15 test\n"])
+    @patch.object(manage.subprocess, "check_output", side_effect=["2.2.7.4\n", "PID COMMAND\n101 /usr/local/bin/xray run -c /etc/v2raya/config.json\n", "Xray 25.10.15 test\n", "2.2.7.4\n", "PID COMMAND\n101 /usr/local/bin/xray run -c /etc/v2raya/config.json\n", "Xray 25.10.15 test\n"])
     @patch.object(watchdog, "backup", return_value="private-backup")
     @patch.object(watchdog, "run", return_value=True)
     def test_private_notification_copy_and_no_secret_in_preview(self, run, backup, version, api_class, root):
@@ -149,7 +169,7 @@ class DeploymentTests(unittest.TestCase):
 
     @patch.object(manage, "require_root")
     @patch.object(watchdog, "LocalAPI")
-    @patch.object(manage.subprocess, "check_output", side_effect=["2.2.7.4\n", "Xray 25.10.15 test\n"])
+    @patch.object(manage.subprocess, "check_output", side_effect=["2.2.7.4\n", "PID COMMAND\n101 /usr/local/bin/xray run -c /etc/v2raya/config.json\n", "Xray 25.10.15 test\n"])
     @patch.object(watchdog, "backup", return_value="private-backup")
     @patch.object(watchdog, "run", return_value=False)
     def test_unhealthy_install_rolls_back_routes_and_settings(self, _, backup, version, api_class, root):

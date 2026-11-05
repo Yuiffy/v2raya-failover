@@ -70,6 +70,23 @@ class NotificationTests(unittest.TestCase):
         self.deliver({"StatusCode": 0, "StatusMessage": "success"})
         self.assertEqual(self.receipt()["status"], "sent")
 
+    def test_node_names_and_coordinates_are_shown_without_private_links(self):
+        self.old["name"] = "美国 A01\nGemini"
+        self.new["name"] = "美国 A02 Gemini"
+        opener, _ = self.deliver({"code": 0})
+        text = json.loads(opener.open.call_args.args[0].data)["content"]["text"]
+        self.assertIn("美国 A01 Gemini（sub=0, id=1）", text)
+        self.assertIn("美国 A02 Gemini（sub=0, id=2）", text)
+        self.assertNotIn("must-not-be-sent", text)
+
+    def test_adding_names_does_not_resend_the_same_event(self):
+        self.deliver({"code": 0})
+        self.old["name"] = "美国 A01"
+        self.new["name"] = "美国 A02"
+        with patch.object(notifier.urllib.request, "build_opener") as factory:
+            notifier.notify_switch(self.config, "proxy", self.old, self.new, self.state)
+        factory.assert_not_called()
+
     def test_unsigned_chinese_notification(self):
         notifier._write_private(self.credentials, {"webhook": self.webhook})
         self.config["feishu"]["language"] = "zh"
@@ -145,6 +162,14 @@ class SwitchNotificationTests(unittest.TestCase):
         self.api.config = {"proxy_url": "http://127.0.0.1:20172", "verify_ports": [20171, 20172]}
         self.api.subs = [{"servers": [{"serverObj": {}}, {"serverObj": self.node}]}]
         self.api.call.return_value = {"touch": {"connectedServer": [self.current]}}
+
+    def test_cached_names_are_resolved_without_mutating_connection_identity(self):
+        self.api.subs[0]["servers"][0]["serverObj"] = {"ps": "美国 A01", "id": "private-id"}
+        named = watchdog.named_node(self.api, self.current)
+        self.assertEqual(named["name"], "美国 A01")
+        self.assertNotIn("name", self.current)
+        self.assertNotIn("private-id", json.dumps(named))
+        self.assertNotIn("name", watchdog.named_node(self.api, {**self.current, "id": 999}))
 
     @patch.object(watchdog, "notify_switch")
     @patch.object(watchdog, "backup", return_value="private-backup")

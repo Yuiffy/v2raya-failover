@@ -21,6 +21,7 @@ import struct
 import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -304,6 +305,19 @@ def backup(config, api):
     return path
 
 
+def legacy_replace_connection(api, which):
+    api.call("connection", "POST", which)
+    identity = lambda item: tuple(item.get(key) for key in ("_type", "sub", "id", "outbound"))
+    selected = api.call("touch")["touch"]["connectedServer"]
+    for previous in selected:
+        if previous.get("outbound") == which["outbound"] and identity(previous) != identity(which):
+            api.call("connection", "DELETE", previous)
+    selected = [item for item in api.call("touch")["touch"]["connectedServer"]
+                if item.get("outbound") == which["outbound"]]
+    if len(selected) != 1 or identity(selected[0]) != identity(which):
+        raise RuntimeError("legacy connection replacement did not select exactly one node")
+
+
 def replace_connection(api, which):
     """Replace an outbound's members on v2rayA 2.5, with a legacy fallback.
 
@@ -317,9 +331,25 @@ def replace_connection(api, which):
             "PUT",
             {"outbound": which["outbound"], "touches": [which]},
         )
+    except urllib.error.HTTPError as error:
+        if error.code not in (404, 405):
+            raise
+        legacy_replace_connection(api, which)
     except RuntimeError:
         # v2rayA 2.2 does not expose outboundConnections yet.
-        api.call("connection", "POST", which)
+        legacy_replace_connection(api, which)
+
+
+def named_node(api, which):
+    result = dict(which)
+    try:
+        if which.get("_type") == "subscriptionServer" and which["sub"] >= 0 and which["id"] > 0:
+            node = api.subs[which["sub"]]["servers"][which["id"] - 1]["serverObj"]
+            if isinstance(node.get("ps"), str) and node["ps"].strip():
+                result["name"] = node["ps"]
+    except (KeyError, IndexError, TypeError):
+        pass
+    return result
 
 
 def guard_group(api, name, group, state, check_only=False):
@@ -366,7 +396,7 @@ def guard_group(api, name, group, state, check_only=False):
         raise
     # Notifications must not roll back an already verified, working proxy.
     try:
-        notify_switch(api.config, name, current, which, state)
+        notify_switch(api.config, name, named_node(api, current), named_node(api, which), state)
     except Exception as error:
         log("notification_error", kind=type(error).__name__)
     return True

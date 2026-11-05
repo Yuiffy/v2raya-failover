@@ -4,6 +4,7 @@ import contextlib
 from pathlib import Path
 import tempfile
 import unittest
+import urllib.error
 import sys
 from unittest.mock import Mock, patch
 
@@ -86,6 +87,42 @@ class FailoverTests(unittest.TestCase):
         self.assertEqual(len(watchdog.subscription_nodes(base64.b64encode(body.encode()).decode())), 5)
         self.assertEqual(watchdog.subscription_nodes("<html>Access denied</html>"), [])
         self.assertEqual(watchdog.subscription_nodes("vless://only-one"), [])
+
+    def test_legacy_missing_replacement_endpoint_uses_connection(self):
+        for status in (404, 405):
+            with self.subTest(status=status):
+                self.api.call.reset_mock()
+                self.api.call.side_effect = [
+                    urllib.error.HTTPError("http://127.0.0.1/api/outboundConnections", status, "missing", {}, None),
+                    {},
+                    {"touch": {"connectedServer": [self.which]}},
+                    {"touch": {"connectedServer": [self.which]}},
+                ]
+                watchdog.replace_connection(self.api, self.which)
+                self.api.call.assert_any_call("connection", "POST", self.which)
+
+    def test_legacy_replacement_removes_old_members_only_from_its_group(self):
+        other = {**self.current, "outbound": "downloads"}
+        self.api.call.side_effect = [
+            {},
+            {"touch": {"connectedServer": [self.current, self.which, other]}},
+            {},
+            {"touch": {"connectedServer": [self.which, other]}},
+        ]
+        watchdog.legacy_replace_connection(self.api, self.which)
+        self.api.call.assert_any_call("connection", "DELETE", self.current)
+        self.assertFalse(any(call.args == ("connection", "DELETE", other) for call in self.api.call.call_args_list))
+
+    def test_replacement_auth_and_server_errors_do_not_use_legacy_endpoint(self):
+        for status in (401, 403, 500):
+            with self.subTest(status=status):
+                self.api.call.reset_mock()
+                self.api.call.side_effect = urllib.error.HTTPError(
+                    "http://127.0.0.1/api/outboundConnections", status, "rejected", {}, None
+                )
+                with self.assertRaises(urllib.error.HTTPError):
+                    watchdog.replace_connection(self.api, self.which)
+                self.api.call.assert_called_once()
 
     @patch.object(watchdog, "curl", return_value=(0, "200", "<html>error</html>", 1))
     def test_invalid_subscription_never_calls_update(self, _):

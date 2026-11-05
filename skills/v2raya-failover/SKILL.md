@@ -8,14 +8,15 @@ description: Deploy, inspect, configure or remove cached-node failover for a Lin
 Use the bundled [manager](scripts/manage.py), [watchdog](scripts/v2raya_failover.py), and
 [configuration reference](references/configuration.md). They are self-contained; an installed
 skill does not need a separate checkout. Runtime dependencies are Linux, root, Python 3.10+,
-curl, Docker and systemd. This release targets v2rayA 2.2.7.4, 2.2.7.5 and 2.5.10; Xray
-25.10.15 and the 2.5.x `v2raya_core` layout are tested cores.
+curl, Docker and systemd. This release targets v2rayA 2.2.5.1, 2.2.7.4, 2.2.7.5 and
+2.5.10; Xray 1.8.8, 25.10.15, 26.1.23 and the 2.5.x `v2raya_core` layout are tested cores.
 
 ## Establish the target and preserve existing choices
 
 - Confirm the user's intended server, Docker container, management/proxy ports, configuration
   mount, existing outbound names, subscription indices and desired node regions. Inspect live
   state; do not infer these from the example profile.
+- Verify the actual running core, not only installed executables. The installer requires a running Xray/v2raya_core.
 - Preserve the existing routing outside the tool's managed block. Keep business services
   separate from download/subscription traffic if that is the user's existing design.
 - Use the official login API through a loopback endpoint and an operator-provided private

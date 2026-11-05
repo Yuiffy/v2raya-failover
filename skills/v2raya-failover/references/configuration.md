@@ -69,8 +69,9 @@ copies the private file to `/etc/v2raya-failover/feishu.json`; neither the profi
 dry-run contains the webhook. Existing installations need the updated runtime script
 and its `feishu_notify.py` sibling before enabling this configuration.
 
-The message identifies the instance, outbound, previous/current subscription indices
-and node IDs, server-local timestamp and event ID. It omits node addresses, names,
+The message identifies the instance, outbound, previous/current cached node names,
+subscription indices and node IDs, server-local timestamp and event ID. Missing names
+fall back to the identifiers. It omits node addresses,
 subscription URLs, account credentials and webhook details. The fixed text contains
 `v2rayA`; configure custom-bot keyword/IP/signature restrictions accordingly. Signing
 follows the [official custom-bot protocol](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot).
@@ -87,8 +88,9 @@ the group's state. These receipts are private and must not be attached to public
 
 Use `journalctl -u v2raya-failover.service` and the private state file. Logs omit passwords,
 tokens, subscription URLs, response bodies and node addresses. They contain outbound names,
-subscription indices, node IDs and backup paths. Node names/addresses remain in private
-v2rayA configuration and backups. Do not attach those backups to a public issue.
+subscription indices, node IDs and backup paths. Node names are included in enabled
+switch notifications; node addresses remain in private v2rayA configuration and backups.
+Do not attach those backups to a public issue.
 
 `manage.py uninstall` disables the timer, restores any journaled temporary subscription
 override, removes its routing block, restores setting fields only when they still match

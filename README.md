@@ -33,8 +33,9 @@ A switch reloads the proxy core and may interrupt existing connections. This is 
 ## Compatibility
 
 - Linux, root, Python 3.10+, curl, Docker and systemd.
-- The installer checks for **v2rayA 2.2.7.4**, **2.2.7.5** and **2.5.10**. The tested cores are
-  **Xray 25.10.15** (2.2.x) and **v2raya_core 2.5.10 / Xray 26.7.28** (2.5.x).
+- The installer checks for **v2rayA 2.2.5.1**, **2.2.7.4**, **2.2.7.5** and **2.5.10**. The tested cores are
+  **Xray 1.8.8**, **25.10.15**, **26.1.23** (2.2.x) and **v2raya_core 2.5.10 / Xray 26.7.28** (2.5.x).
+- The installer checks the running core and its version; an unused installed Xray is insufficient. Confirm that v2rayA actually launches Xray before using Reality nodes.
 - Existing RoutingA, one working selected node per managed outbound and at least two supported cached candidates per group.
 - Management and HTTP proxy ports must be reachable from the host. Bridge-network containers need correct port publishing and listening addresses.
 - New v2rayA versions, other cores and native/non-Docker installations require separate validation.
@@ -110,7 +111,7 @@ Manual management-UI updates use the configured independent subscription outboun
 ## Feishu switch alerts (optional)
 
 Disabled by default. Alerts are attempted only after a switch completes and both configured HTTP ports pass validation. Healthy checks, a first failed round and rolled-back switches do not send success messages.
-Messages include the instance label, outbound, previous/current subscription indices and node IDs, server time and event ID. They omit node addresses, subscription URLs and credentials. Set `language` to `en` or `zh`.
+Messages include the instance label, outbound, previous/current cached node names with subscription indices and node IDs, server time and event ID. If a cached name is unavailable, the identifiers remain visible. They omit node addresses, subscription URLs and credentials. Set `language` to `en` or `zh`.
 
 Create a private bot file on the target:
 

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -27,7 +28,7 @@ class ConfigurationError(ValueError):
     pass
 
 
-SUPPORTED_V2RAYA_VERSIONS = {"2.2.7.4", "2.2.7.5", "2.5.10"}
+SUPPORTED_V2RAYA_VERSIONS = {"2.2.5.1", "2.2.7.4", "2.2.7.5", "2.5.10"}
 
 
 def docker_output(container, *command):
@@ -41,18 +42,22 @@ def v2raya_version(container):
 
 
 def core_version(container):
-    errors = []
-    for executable in ("v2raya_core", "xray"):
-        try:
-            output = docker_output(container, executable, "version")
-        except (OSError, subprocess.CalledProcessError) as error:
-            errors.append(error)
-            continue
-        first = output.splitlines()[0] if output else ""
-        if first.startswith("Xray ") or "v2raya_core" in first or re.search(r"\bXray\b", output):
-            return first
-        errors.append(ConfigurationError("unexpected core version output"))
-    raise ConfigurationError("An Xray/v2raya_core core is required") from errors[-1] if errors else None
+    processes = subprocess.check_output(
+        ["docker", "top", container, "-eo", "pid,args"], text=True, timeout=10,
+    )
+    executables = []
+    for line in processes.splitlines()[1:]:
+        fields = line.split(None, 1)
+        arguments = shlex.split(fields[1]) if len(fields) == 2 else []
+        if arguments and Path(arguments[0]).name in ("v2ray", "xray", "v2raya_core"):
+            executables.append(arguments[0])
+    if len(executables) != 1:
+        raise ConfigurationError("Exactly one running proxy core is required")
+    output = docker_output(container, executables[0], "version")
+    first = output.splitlines()[0] if output else ""
+    if first.startswith("Xray ") or first.startswith("v2raya_core ") or re.search(r"\bXray\b", output):
+        return first
+    raise ConfigurationError("The running proxy core must be Xray/v2raya_core; an unused installed Xray is insufficient")
 
 
 def layout(root):

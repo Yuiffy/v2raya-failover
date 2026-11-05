@@ -84,9 +84,18 @@ def _node(which):
     return {key: which.get(key) for key in ("_type", "sub", "id")}
 
 
+def _node_label(which):
+    name = which.get("name")
+    if isinstance(name, str) and name.strip():
+        name = " ".join(name.split())[:160]
+        coordinates = ", ".join(f"{key}={which[key]}" for key in ("sub", "id") if key in which)
+        return f"{name}（{coordinates}）" if coordinates else name
+    return json.dumps(_node(which), ensure_ascii=False, separators=(",", ":"))
+
+
 def _message(options, outbound, old, new, event_id):
-    old_label = json.dumps(_node(old), ensure_ascii=False, separators=(",", ":"))
-    new_label = json.dumps(_node(new), ensure_ascii=False, separators=(",", ":"))
+    old_label = _node_label(old)
+    new_label = _node_label(new)
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S %z")
     instance = options.get("instance_name", "v2rayA")
     if options.get("language", "zh") == "en":
