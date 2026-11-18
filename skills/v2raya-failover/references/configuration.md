@@ -15,7 +15,7 @@ state, lock and backup paths to `/opt/v2raya-failover`, `/etc/v2raya-failover`,
 | `failure_threshold` | Consecutive failures before testing replacements; minimum two. A healthy run resets the counter. |
 | `groups` | Existing v2rayA outbound names. Installation never creates outbound groups or silently selects nodes. |
 | `subscription_indices` | Zero-based indices from `inspect`. Do not reuse an index from another server. |
-| `name_prefixes` | Allowed beginnings of node display names. Candidates must also use VLESS TCP Reality. |
+| `name_prefixes` | Allowed beginnings of node display names (`ps` for VLESS, `name` for Shadowsocks). Candidates must use VLESS TCP Reality, or Shadowsocks AEAD (`aes-128-gcm`, `aes-256-gcm`, `chacha20-ietf-poly1305`) with no plugin or `simple-obfs` HTTP. Include any flag emoji in the prefix when present in the cached name. |
 | `require_country` | Optional uppercase two-letter country code, checked using Cloudflare trace. Use only when required for the user's service. |
 | `probes` | HTTPS URL, expected HTTP status, optional required response substring. All probes for a group must pass. |
 | `probe_timeout_seconds` | Per-HTTPS-probe timeout, from 4 to 30 seconds; default 8. Use a measured value for high-latency providers. |
@@ -48,6 +48,13 @@ not refresh a subscription as part of selection, rechecks for manual changes, ba
 switches through the official API, and validates both HTTP ports. Validation failure
 attempts to restore the previous selection. Each core reload can interrupt existing
 connections; this is recovery, not connection-preserving load balancing.
+
+Choose probes for the upstream that the managed service actually uses. For example,
+when every model request uses Cloudflare AI Gateway, its HTTPS endpoint can be checked
+for HTTP 200 and the expected `ai-gateway` response, together with an optional country
+check. This establishes proxy connectivity to that gateway; it does not establish direct
+OpenAI access or successful authenticated model inference. Keep an OpenAI probe when
+direct OpenAI access is also required.
 
 The timer stops a run after 240 seconds and cleans up child Xray processes. Extremely
 large or uniformly unreachable subscriptions may exceed that budget. Prefer a focused

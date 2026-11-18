@@ -11,6 +11,7 @@ import base64
 import concurrent.futures
 import contextlib
 import copy
+import hashlib
 import ipaddress
 import json
 import os
@@ -182,16 +183,72 @@ def healthy(proxy, group):
 
 
 def node_key(node):
-    return tuple(str(node.get(k, "")) for k in ("protocol", "add", "port", "id", "pbk", "sid", "sni", "flow", "net", "tls"))
+    # Include credentials and transport/plugin settings when rechecking a cached
+    # candidate after a subscription reorder. Never expose them in diagnostics.
+    identity = {key: value for key, value in node.items() if key not in ("name", "ps")}
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).digest()
+
+
+def node_name(node):
+    return node.get("ps") or node.get("name") or ""
+
+
+def node_endpoint(node):
+    return node.get("add") or node.get("server"), int(node["port"])
 
 
 def supported(node):
+    if node.get("protocol") == "shadowsocks":
+        plugin = node.get("plugin") or {}
+        opts = plugin.get("opts") or {}
+        return (
+            all(node.get(key) for key in ("server", "port", "cipher", "password"))
+            and node["cipher"] in {"aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"}
+            and (not plugin.get("name") or (
+                plugin["name"] == "simple-obfs" and opts.get("obfs") == "http"
+            ))
+        )
     return node.get("protocol") == "vless" and node.get("net", "tcp") == "tcp" and node.get("tls") == "reality" and all(node.get(k) for k in ("add", "port", "id", "pbk", "sni"))
 
 
 def isolated_config(node, port):
     if not supported(node):
         raise ValueError("unsupported cached node transport")
+    if node["protocol"] == "shadowsocks":
+        outbound = {
+            "tag": "proxy", "protocol": "shadowsocks",
+            "settings": {"servers": [{"address": node["server"], "port": int(node["port"]),
+                                      "method": node["cipher"], "password": node["password"]}]},
+        }
+        plugin = node.get("plugin") or {}
+        if plugin.get("name"):
+            opts = plugin["opts"]
+            path = opts.get("uri") or opts.get("path") or "/"
+            if not path.startswith("/"):
+                path = "/" + path
+            outbound["streamSettings"] = {
+                "network": "tcp", "tcpSettings": {"header": {
+                    "type": "http", "request": {
+                        "version": "1.1", "method": "GET", "path": path.split(","),
+                        "headers": {
+                            "Host": (opts.get("host") or "cloudflare.com").split(","),
+                            "User-Agent": ["Mozilla/5.0"], "Accept-Encoding": ["gzip, deflate"],
+                            "Connection": ["keep-alive"], "Pragma": "no-cache",
+                        },
+                    },
+                    "response": {
+                        "version": "1.1", "status": "200", "reason": "OK",
+                        "headers": {
+                            "Content-Type": ["application/octet-stream", "video/mpeg"],
+                            "Transfer-Encoding": ["chunked"],
+                            "Connection": ["keep-alive"], "Pragma": "no-cache",
+                        },
+                    },
+                }},
+            }
+        return {"log": {"loglevel": "none"}, "inbounds": [
+            {"listen": "127.0.0.1", "port": port, "protocol": "http", "settings": {}}
+        ], "outbounds": [outbound]}
     outbound = {
         "tag": "proxy", "protocol": "vless",
         "settings": {"vnext": [{"address": node["add"], "port": int(node["port"]),
@@ -247,7 +304,7 @@ def best_candidate(api, group, current):
     for subindex in group["subscription_indices"]:
         for index, raw in enumerate(api.subs[subindex].get("servers", []), 1):
             node = raw.get("serverObj", {})
-            if supported(node) and any(node.get("ps", "").startswith(p) for p in group["name_prefixes"]):
+            if supported(node) and any(node_name(node).startswith(p) for p in group["name_prefixes"]):
                 which = {"_type": "subscriptionServer", "sub": subindex, "id": index, "outbound": current["outbound"]}
                 if (subindex, index) != (current.get("sub"), current.get("id")):
                     candidates.append((which, node))
@@ -255,7 +312,7 @@ def best_candidate(api, group, current):
     def tcp(item):
         start = time.monotonic()
         try:
-            with socket.create_connection((item[1]["add"], int(item[1]["port"])), timeout=2):
+            with socket.create_connection(node_endpoint(item[1]), timeout=2):
                 return time.monotonic() - start, item
         except OSError:
             return float("inf"), item
@@ -347,8 +404,8 @@ def named_node(api, which):
     try:
         if which.get("_type") == "subscriptionServer" and which["sub"] >= 0 and which["id"] > 0:
             node = api.subs[which["sub"]]["servers"][which["id"] - 1]["serverObj"]
-            if isinstance(node.get("ps"), str) and node["ps"].strip():
-                result["name"] = node["ps"]
+            if isinstance(node_name(node), str) and node_name(node).strip():
+                result["name"] = node_name(node)
     except (KeyError, IndexError, TypeError):
         pass
     return result

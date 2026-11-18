@@ -128,7 +128,7 @@ def validate(config, api):
         for index in group["subscription_indices"]:
             if not isinstance(index, int) or index < 0 or index >= len(api.subs):
                 raise ConfigurationError("A subscription index is out of range (indices start at zero)")
-            matches += sum(watchdog.supported(raw.get("serverObj", {})) and any(raw.get("serverObj", {}).get("ps", "").startswith(p) for p in group["name_prefixes"]) for raw in api.subs[index].get("servers", []))
+            matches += sum(watchdog.supported(raw.get("serverObj", {})) and any(watchdog.node_name(raw.get("serverObj", {})).startswith(p) for p in group["name_prefixes"]) for raw in api.subs[index].get("servers", []))
         if matches < 2:
             raise ConfigurationError("Each managed group needs at least two supported cached candidates")
         for probe in group["probes"]:

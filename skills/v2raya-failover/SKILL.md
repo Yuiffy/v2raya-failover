@@ -39,7 +39,8 @@ curl, Docker and systemd. This release targets v2rayA 2.2.5.1, 2.2.6.7, 2.2.7.4,
 3. Run `python3 scripts/manage.py inspect --config /private/path/profile.json` and adapt
    the profile to the actual outbound names, zero-based subscription indices, node-name
    prefixes, probe endpoints, expected HTTP responses, country constraints and business domains.
-   Check that each group has at least two supported cached VLESS TCP Reality nodes.
+   Check that each group has at least two supported cached nodes: VLESS TCP Reality,
+   or Shadowsocks AEAD with no plugin or simple-obfs HTTP. See the configuration reference.
 4. Require existing RoutingA and a working selected node per group. If these prerequisites
    are absent, explain the specific gap and prepare the needed configuration within the user's
    requested scope. Do not switch unrelated services or change all traffic to one region.
