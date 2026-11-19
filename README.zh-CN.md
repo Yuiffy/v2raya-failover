@@ -20,7 +20,7 @@
 5. 切换前备份，通过 v2rayA 官方 API 切换，检查两个 HTTP 代理端口；失败尝试回退。
 
 美国业务与香港下载只是示例，可按节点名称、探测地址和国家约束配置。
-目前候选节点仅支持 **VLESS + TCP + Reality**。不宣称兼容其他节点传输协议。
+候选节点支持 **VLESS + TCP + Reality**，以及使用 `aes-128-gcm`、`aes-256-gcm`、`chacha20-ietf-poly1305` 的 **Shadowsocks AEAD**；后者支持无插件或 `simple-obfs` HTTP 混淆，其他传输或插件仍会拒绝。
 
 | 示例检查 | 预期响应 | 验证范围 |
 |---|---|---|

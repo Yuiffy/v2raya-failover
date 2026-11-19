@@ -11,6 +11,7 @@ import base64
 import concurrent.futures
 import contextlib
 import copy
+import hashlib
 import ipaddress
 import json
 import os
@@ -163,35 +164,106 @@ def curl(url, proxy, timeout=8, connect_timeout=4):
     return result.returncode, parts[0] if parts else "000", body, float(parts[1]) if len(parts) > 1 else timeout
 
 
-def healthy(proxy, group):
+def log_probe_failure(proxy, outbound, url, rc, status, expected, elapsed):
+    log("probe_check_failed", outbound=outbound,
+        host=urllib.parse.urlsplit(url).hostname,
+        proxy_port=urllib.parse.urlsplit(proxy).port,
+        reason="transport" if rc else "response_mismatch" if status == expected else "http_status",
+        curl_exit=rc, status=status, expected_status=expected,
+        elapsed_seconds=round(elapsed, 3))
+
+
+def healthy(proxy, group, *, report_outbound=None):
     total = 0.0
     timeout = group.get("probe_timeout_seconds", 8)
     connect_timeout = group.get("probe_connect_timeout_seconds", 4)
     for probe in group["probes"]:
         rc, status, body, elapsed = curl(probe["url"], proxy, timeout=timeout, connect_timeout=connect_timeout)
         total += elapsed
-        if rc or status != str(probe["status"]) or (probe.get("contains") and probe["contains"] not in body):
+        expected = str(probe["status"])
+        if rc or status != expected or (probe.get("contains") and probe["contains"] not in body):
+            if report_outbound is not None:
+                log_probe_failure(proxy, report_outbound, probe["url"], rc, status, expected, elapsed)
             return False, total
     country = group.get("require_country") or ("US" if group.get("require_us") else None)
     if country:
-        rc, status, body, elapsed = curl("https://www.cloudflare.com/cdn-cgi/trace", proxy, timeout=timeout, connect_timeout=connect_timeout)
+        url = "https://www.cloudflare.com/cdn-cgi/trace"
+        rc, status, body, elapsed = curl(url, proxy, timeout=timeout, connect_timeout=connect_timeout)
         total += elapsed
         if rc or status != "200" or "loc=" + country not in body.splitlines():
+            if report_outbound is not None:
+                log_probe_failure(proxy, report_outbound, url, rc, status, "200", elapsed)
             return False, total
     return True, total
 
 
 def node_key(node):
-    return tuple(str(node.get(k, "")) for k in ("protocol", "add", "port", "id", "pbk", "sid", "sni", "flow", "net", "tls"))
+    # Include credentials and transport/plugin settings when rechecking a cached
+    # candidate after a subscription reorder. Never expose them in diagnostics.
+    identity = {key: value for key, value in node.items() if key not in ("name", "ps")}
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).digest()
+
+
+def node_name(node):
+    return node.get("ps") or node.get("name") or ""
+
+
+def node_endpoint(node):
+    return node.get("add") or node.get("server"), int(node["port"])
 
 
 def supported(node):
+    if node.get("protocol") == "shadowsocks":
+        plugin = node.get("plugin") or {}
+        opts = plugin.get("opts") or {}
+        return (
+            all(node.get(key) for key in ("server", "port", "cipher", "password"))
+            and node["cipher"] in {"aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"}
+            and (not plugin.get("name") or (
+                plugin["name"] == "simple-obfs" and opts.get("obfs") == "http"
+            ))
+        )
     return node.get("protocol") == "vless" and node.get("net", "tcp") == "tcp" and node.get("tls") == "reality" and all(node.get(k) for k in ("add", "port", "id", "pbk", "sni"))
 
 
 def isolated_config(node, port):
     if not supported(node):
         raise ValueError("unsupported cached node transport")
+    if node["protocol"] == "shadowsocks":
+        outbound = {
+            "tag": "proxy", "protocol": "shadowsocks",
+            "settings": {"servers": [{"address": node["server"], "port": int(node["port"]),
+                                      "method": node["cipher"], "password": node["password"]}]},
+        }
+        plugin = node.get("plugin") or {}
+        if plugin.get("name"):
+            opts = plugin["opts"]
+            path = opts.get("uri") or opts.get("path") or "/"
+            if not path.startswith("/"):
+                path = "/" + path
+            outbound["streamSettings"] = {
+                "network": "tcp", "tcpSettings": {"header": {
+                    "type": "http", "request": {
+                        "version": "1.1", "method": "GET", "path": path.split(","),
+                        "headers": {
+                            "Host": (opts.get("host") or "cloudflare.com").split(","),
+                            "User-Agent": ["Mozilla/5.0"], "Accept-Encoding": ["gzip, deflate"],
+                            "Connection": ["keep-alive"], "Pragma": "no-cache",
+                        },
+                    },
+                    "response": {
+                        "version": "1.1", "status": "200", "reason": "OK",
+                        "headers": {
+                            "Content-Type": ["application/octet-stream", "video/mpeg"],
+                            "Transfer-Encoding": ["chunked"],
+                            "Connection": ["keep-alive"], "Pragma": "no-cache",
+                        },
+                    },
+                }},
+            }
+        return {"log": {"loglevel": "none"}, "inbounds": [
+            {"listen": "127.0.0.1", "port": port, "protocol": "http", "settings": {}}
+        ], "outbounds": [outbound]}
     outbound = {
         "tag": "proxy", "protocol": "vless",
         "settings": {"vnext": [{"address": node["add"], "port": int(node["port"]),
@@ -242,27 +314,36 @@ def isolated_proxy(config, node):
                 process.wait()
 
 
-def best_candidate(api, group, current):
-    candidates = []
+def matching_cached_nodes(api, group, exclude=None):
     for subindex in group["subscription_indices"]:
         for index, raw in enumerate(api.subs[subindex].get("servers", []), 1):
+            if (subindex, index) == exclude:
+                continue
             node = raw.get("serverObj", {})
-            if supported(node) and any(node.get("ps", "").startswith(p) for p in group["name_prefixes"]):
-                which = {"_type": "subscriptionServer", "sub": subindex, "id": index, "outbound": current["outbound"]}
-                if (subindex, index) != (current.get("sub"), current.get("id")):
-                    candidates.append((which, node))
+            if supported(node) and any(node_name(node).startswith(p) for p in group["name_prefixes"]):
+                yield subindex, index, node
+
+
+def best_candidate(api, group, current):
+    exclude = (current.get("sub"), current.get("id"))
+    candidates = [
+        ({"_type": "subscriptionServer", "sub": sub, "id": index, "outbound": current["outbound"]}, node)
+        for sub, index, node in matching_cached_nodes(api, group, exclude)
+    ]
+    if not candidates:
+        return None
 
     def tcp(item):
         start = time.monotonic()
         try:
-            with socket.create_connection((item[1]["add"], int(item[1]["port"])), timeout=2):
+            with socket.create_connection(node_endpoint(item[1]), timeout=2):
                 return time.monotonic() - start, item
         except OSError:
             return float("inf"), item
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
         ranked = sorted(pool.map(tcp, candidates), key=lambda x: x[0])
-    shortlist = [item for delay, item in ranked if delay != float("inf")][:6]
+    reachable = [item for delay, item in ranked if delay != float("inf")]
 
     def check(item):
         try:
@@ -275,12 +356,12 @@ def best_candidate(api, group, current):
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
         # If the six fastest TCP endpoints fail HTTP, keep searching the cached
         # list in bounded batches instead of depending on a subscription refresh.
-        while shortlist:
-            results = sorted(pool.map(check, shortlist), key=lambda x: x[0])
-            if results[0][0] != float("inf"):
-                return results[0][1]
-            ranked = ranked[6:]
-            shortlist = [item for delay, item in ranked if delay != float("inf")][:6]
+        for start in range(0, len(reachable), 6):
+            elapsed, candidate = min(pool.map(check, reachable[start:start + 6]), key=lambda result: result[0])
+            if elapsed != float("inf"):
+                return candidate
+    log("candidate_checks_exhausted", outbound=current["outbound"],
+        matched=len(candidates), tcp_reachable=len(reachable))
     return None
 
 
@@ -347,8 +428,8 @@ def named_node(api, which):
     try:
         if which.get("_type") == "subscriptionServer" and which["sub"] >= 0 and which["id"] > 0:
             node = api.subs[which["sub"]]["servers"][which["id"] - 1]["serverObj"]
-            if isinstance(node.get("ps"), str) and node["ps"].strip():
-                result["name"] = node["ps"]
+            if isinstance(node_name(node), str) and node_name(node).strip():
+                result["name"] = node_name(node)
     except (KeyError, IndexError, TypeError):
         pass
     return result
@@ -356,7 +437,7 @@ def named_node(api, which):
 
 def guard_group(api, name, group, state, check_only=False):
     proxy = api.config["proxy_url"]
-    ok, _ = healthy(proxy, group)
+    ok, _ = healthy(proxy, group, report_outbound=name)
     count = 0 if ok else state.get("failures", 0) + 1
     state["failures"] = count
     if ok or check_only:
@@ -388,7 +469,7 @@ def guard_group(api, name, group, state, check_only=False):
     try:
         replace_connection(api, which)
         for port in api.config["verify_ports"]:
-            if not healthy("http://127.0.0.1:" + str(port), group)[0]:
+            if not healthy("http://127.0.0.1:" + str(port), group, report_outbound=name)[0]:
                 raise RuntimeError("switched outbound did not pass validation")
         state.update(failures=0, last_switch=time.time())
         log("switched", outbound=name, subscription_index=which["sub"], node_id=which["id"], backup=str(before))
@@ -534,14 +615,25 @@ def run(config, state, check_only=False, refresh=False):
         log("core_stopped_no_action")
         return False
     all_healthy = True
+    candidate_pool_ready = True
+    connected = touch["touch"]["connectedServer"]
     for name, group in config["groups"].items():
+        selected = [item for item in connected if item.get("outbound") == name]
+        available = False
+        if len(selected) == 1:
+            current = selected[0]
+            exclude = (current.get("sub"), current.get("id"))
+            available = next(matching_cached_nodes(api, group, exclude), None) is not None
+        if not available:
+            log("candidate_pool_unavailable", outbound=name, selected_nodes=len(selected))
+            candidate_pool_ready = False
         group_state = state.setdefault(name, {})
         all_healthy = guard_group(api, name, group, group_state, check_only) and all_healthy
     # Refresh must still work when one outbound has no surviving cached nodes.
     if not check_only:
         refresh_subscriptions(api, state, force=refresh)
-    log("check_complete", healthy=all_healthy, check_only=check_only)
-    return all_healthy
+    log("check_complete", healthy=all_healthy, candidate_pool_ready=candidate_pool_ready, check_only=check_only)
+    return all_healthy and candidate_pool_ready
 
 
 def main():

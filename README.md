@@ -19,7 +19,7 @@ Use it with an existing v2rayA installation, subscription cache and RoutingA con
 5. The tool backs up configuration, switches through the official v2rayA API, validates both configured HTTP ports and attempts rollback if validation fails.
 6. If enabled, a verified switch produces one Feishu notification attempt. Notification failure never rolls back the working proxy.
 
-US business traffic and Hong Kong downloads are examples. Configure your own prefixes, probes and optional country constraint. Candidates currently support **VLESS + TCP + Reality** only.
+US business traffic and Hong Kong downloads are examples. Configure your own prefixes, probes and optional country constraint. Candidates support **VLESS + TCP + Reality**, and **Shadowsocks AEAD** (`aes-128-gcm`, `aes-256-gcm`, `chacha20-ietf-poly1305`) with no plugin or `simple-obfs` HTTP. Other transports/plugins are rejected.
 
 | Example probe | Expected response | What it verifies |
 |---|---|---|

@@ -66,6 +66,21 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual(args[args.index("--max-time") + 1], "15")
         self.assertEqual(run.call_args.kwargs["timeout"], 18)
 
+    @patch.object(watchdog, "log")
+    @patch.object(watchdog, "curl", return_value=(0, "401", "different response", 1.125))
+    def test_failed_probe_logs_only_connectivity_metadata(self, _, log):
+        group = {"probes": [{"url": "https://gateway.example/private-path?token=private-token",
+                             "status": 401, "contains": "expected response"}]}
+        self.assertEqual(
+            watchdog.healthy("http://127.0.0.1:20172", group, report_outbound="proxy"),
+            (False, 1.125),
+        )
+        log.assert_called_once_with(
+            "probe_check_failed", outbound="proxy", host="gateway.example",
+            proxy_port=20172, reason="response_mismatch", curl_exit=0, status="401",
+            expected_status="401", elapsed_seconds=1.125,
+        )
+
     def test_v2raya_25_and_v2raya_core_are_supported(self):
         with patch.object(manage, "docker_output", side_effect=["v2rayA 2.5.10\n", "v2raya_core 2.5.10\n"]), patch.object(manage.subprocess, "check_output", return_value="PID COMMAND\n101 /usr/bin/v2raya_core run -c /etc/v2raya/config.json\n"):
             self.assertEqual(manage.v2raya_version("v2raya"), "2.5.10")

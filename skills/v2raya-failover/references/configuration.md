@@ -15,7 +15,7 @@ state, lock and backup paths to `/opt/v2raya-failover`, `/etc/v2raya-failover`,
 | `failure_threshold` | Consecutive failures before testing replacements; minimum two. A healthy run resets the counter. |
 | `groups` | Existing v2rayA outbound names. Installation never creates outbound groups or silently selects nodes. |
 | `subscription_indices` | Zero-based indices from `inspect`. Do not reuse an index from another server. |
-| `name_prefixes` | Allowed beginnings of node display names. Candidates must also use VLESS TCP Reality. |
+| `name_prefixes` | Allowed beginnings of node display names (`ps` for VLESS, `name` for Shadowsocks). Candidates must use VLESS TCP Reality, or Shadowsocks AEAD (`aes-128-gcm`, `aes-256-gcm`, `chacha20-ietf-poly1305`) with no plugin or `simple-obfs` HTTP. Include any flag emoji in the prefix when present in the cached name. |
 | `require_country` | Optional uppercase two-letter country code, checked using Cloudflare trace. Use only when required for the user's service. |
 | `probes` | HTTPS URL, expected HTTP status, optional required response substring. All probes for a group must pass. |
 | `probe_timeout_seconds` | Per-HTTPS-probe timeout, from 4 to 30 seconds; default 8. Use a measured value for high-latency providers. |
@@ -48,6 +48,20 @@ not refresh a subscription as part of selection, rechecks for manual changes, ba
 switches through the official API, and validates both HTTP ports. Validation failure
 attempts to restore the previous selection. Each core reload can interrupt existing
 connections; this is recovery, not connection-preserving load balancing.
+
+Choose probes for the upstream that the managed service actually uses. For example,
+when every model request uses Cloudflare AI Gateway, make an unauthenticated GET to
+the provider route used by the service and verify its expected response. A typical
+OpenAI-compatible route returns HTTP 401 and the expected missing-authentication
+message. Verify the status and body for your gateway before configuring the probe.
+The route check establishes connectivity. Monitor authenticated inference separately.
+Keep an OpenAI probe when direct OpenAI access is also required.
+
+`--check` requires both a healthy live route and a cached alternative that matches
+the profile. `candidate_pool_unavailable` reports a missing selection or an empty
+filtered pool. `candidate_checks_exhausted` reports an eligible pool that failed TCP
+or isolated HTTPS checks. Probe failure logs show the hostname, HTTP status, curl
+exit code, and elapsed time. They omit URLs and response bodies.
 
 The timer stops a run after 240 seconds and cleans up child Xray processes. Extremely
 large or uniformly unreachable subscriptions may exceed that budget. Prefer a focused

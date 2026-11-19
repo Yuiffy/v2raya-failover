@@ -26,6 +26,69 @@ class FailoverTests(unittest.TestCase):
         self.api.call.return_value = {"touch": {"connectedServer": [self.current]}}
         self.which = {**self.current, "id": 2}
 
+    def shadowsocks_node(self):
+        return {
+            "protocol": "shadowsocks", "name": "🇺🇸 US cached node",
+            "server": "ss.invalid", "port": 8443, "cipher": "aes-128-gcm",
+            "password": "test-password", "plugin": {
+                "name": "simple-obfs", "opts": {"obfs": "http", "host": "cdn.invalid", "uri": "probe"},
+            },
+        }
+
+    def test_shadowsocks_obfs_uses_cached_credentials_and_transport(self):
+        node = self.shadowsocks_node()
+        self.assertTrue(watchdog.supported(node))
+        config = watchdog.isolated_config(node, 24300)
+        outbound = config["outbounds"][0]
+        self.assertEqual(outbound["settings"]["servers"][0], {
+            "address": "ss.invalid", "port": 8443, "method": "aes-128-gcm", "password": "test-password",
+        })
+        header = outbound["streamSettings"]["tcpSettings"]["header"]
+        self.assertEqual(header["request"]["headers"]["Host"], ["cdn.invalid"])
+        self.assertEqual(header["request"]["path"], ["/probe"])
+        self.assertEqual(config["inbounds"][0]["listen"], "127.0.0.1")
+
+    def test_plain_shadowsocks_and_unsupported_plugins(self):
+        node = self.shadowsocks_node()
+        node.pop("plugin")
+        self.assertTrue(watchdog.supported(node))
+        self.assertNotIn("streamSettings", watchdog.isolated_config(node, 24300)["outbounds"][0])
+        for change in [
+            {"cipher": "rc4-md5"},
+            {"password": ""},
+            {"plugin": {"name": "v2ray-plugin"}},
+            {"plugin": {"name": "simple-obfs", "opts": {"obfs": "tls"}}},
+        ]:
+            with self.subTest(change=change):
+                invalid = {**node, **change}
+                self.assertFalse(watchdog.supported(invalid))
+                with self.assertRaises(ValueError):
+                    watchdog.isolated_config(invalid, 24300)
+
+    def test_shadowsocks_identity_detects_password_or_plugin_changes(self):
+        node = self.shadowsocks_node()
+        key = watchdog.node_key(node)
+        self.assertEqual(key, watchdog.node_key({**node, "name": "renamed"}))
+        self.assertNotEqual(key, watchdog.node_key({**node, "password": "changed"}))
+        changed = copy.deepcopy(node)
+        changed["plugin"]["opts"]["host"] = "changed.invalid"
+        self.assertNotEqual(key, watchdog.node_key(changed))
+
+    @patch.object(watchdog, "healthy", return_value=(True, 1))
+    @patch.object(watchdog, "isolated_proxy", return_value=contextlib.nullcontext("http://127.0.0.1:24300"))
+    @patch.object(watchdog.socket, "create_connection", side_effect=lambda *args, **kwargs: contextlib.nullcontext())
+    def test_shadowsocks_candidate_uses_name_server_fields_and_region_filter(self, connect, isolate, _):
+        node = self.shadowsocks_node()
+        self.api.subs = [{"servers": [{"serverObj": {}}, {"serverObj": node}]}]
+        group = {"subscription_indices": [0], "name_prefixes": ["🇺🇸"]}
+        candidate = watchdog.best_candidate(self.api, group, self.current)
+        self.assertEqual(candidate, (self.which, node))
+        connect.assert_called_once_with(("ss.invalid", 8443), timeout=2)
+        isolate.assert_called_once_with(self.api.config, node)
+        self.assertEqual(watchdog.named_node(self.api, self.which)["name"], node["name"])
+        group["name_prefixes"] = ["🇯🇵"]
+        self.assertIsNone(watchdog.best_candidate(self.api, group, self.current))
+
     @patch.object(watchdog, "healthy", return_value=(True, 1))
     def test_healthy_node_clears_failures_without_switch(self, _):
         state = {"failures": 1}
@@ -203,9 +266,28 @@ class FailoverTests(unittest.TestCase):
     @patch.object(watchdog, "guard_group", return_value=False)
     @patch.object(watchdog, "LocalAPI")
     def test_subscription_can_refresh_with_exhausted_outbound(self, api_class, _, restore, refresh):
-        api_class.return_value.call.return_value = {"running": True}
+        api_class.return_value.call.return_value = {"running": True, "touch": {"connectedServer": []}}
         watchdog.run({"groups": {"proxy": {}}}, {})
         refresh.assert_called_once()
+
+    @patch.object(watchdog, "log")
+    @patch.object(watchdog, "guard_group", return_value=True)
+    @patch.object(watchdog, "LocalAPI")
+    def test_read_only_check_requires_a_matching_alternative(self, api_class, _, log):
+        self.api.call.return_value["running"] = True
+        node = self.shadowsocks_node()
+        self.api.subs[0]["servers"][0]["serverObj"] = node
+        api_class.return_value = self.api
+        group = {"subscription_indices": [0], "name_prefixes": ["🇺🇸"]}
+        config = {"groups": {"proxy": group}}
+
+        self.assertFalse(watchdog.run(config, {}, check_only=True))
+        log.assert_any_call("candidate_pool_unavailable", outbound="proxy", selected_nodes=1)
+        log.assert_called_with("check_complete", healthy=True, candidate_pool_ready=False, check_only=True)
+
+        self.api.subs[0]["servers"][1]["serverObj"]["ps"] = "🇺🇸 alternate"
+        self.assertTrue(watchdog.run(config, {}, check_only=True))
+        self.assertTrue(all(call.args == ("touch",) for call in self.api.call.call_args_list))
 
     @patch.object(watchdog, "reload_core")
     def test_interrupted_subscription_override_is_recovered(self, reload):
