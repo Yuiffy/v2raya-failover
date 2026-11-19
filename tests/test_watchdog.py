@@ -103,6 +103,69 @@ class FailoverTests(unittest.TestCase):
         self.assertEqual(state["failures"], 1)
         self.api.call.assert_not_called()
 
+    @patch.object(watchdog, "business_probe", side_effect=[False, None])
+    @patch.object(watchdog, "healthy", return_value=(True, 1))
+    def test_business_timeout_starts_count_and_probe_error_resets_it(self, *_):
+        state = {}
+        group = {"business_probe": {"command": ["/service-probe"]}}
+        self.assertFalse(watchdog.guard_group(self.api, "proxy", group, state))
+        self.assertEqual(state["business_failures"], 1)
+        self.assertFalse(watchdog.guard_group(self.api, "proxy", group, state))
+        self.assertEqual(state["business_failures"], 0)
+        self.api.call.assert_not_called()
+
+    @patch.object(watchdog, "backup", return_value="backup")
+    @patch.object(watchdog, "curl", return_value=(0, "200", "ip=203.0.113.1\n", 1))
+    @patch.object(watchdog, "best_candidate")
+    @patch.object(watchdog, "healthy", return_value=(True, 1))
+    def test_business_trial_keeps_only_a_successful_application_route(self, _, candidate, __, ___):
+        group = {"business_probe": {"command": ["/service-probe"]}}
+        candidate.return_value = self.which, self.node
+        for recovered in (True, False):
+            with self.subTest(recovered=recovered):
+                selected = [self.current]
+                self.api.call.return_value["touch"]["connectedServer"] = selected
+
+                def replace(_, node):
+                    selected[:] = [node]
+
+                state = {"business_failures": 1}
+                with patch.object(watchdog, "replace_connection", side_effect=replace), patch.object(
+                    watchdog, "business_probe", side_effect=[False, False, recovered]
+                ):
+                    if recovered:
+                        self.assertTrue(watchdog.guard_group(self.api, "proxy", group, state))
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "business probe"):
+                            watchdog.guard_group(self.api, "proxy", group, state)
+
+                self.assertEqual(selected, [self.which if recovered else self.current])
+                self.assertFalse(watchdog.trial_path(self.api.config, "proxy").exists())
+                self.assertEqual(state["business_failures"], 0)
+                self.assertGreater(state["last_business_trial"], 0)
+        self.assertEqual(str(candidate.call_args.kwargs["exclude_exit"]), "203.0.113.1")
+
+    def test_interrupted_business_trial_is_rolled_back_before_retry(self):
+        path = watchdog.trial_path(self.api.config, "proxy")
+        watchdog.write_private(path, {"previous": self.current, "candidate": self.which, "started_at": 12})
+        state = {}
+        with patch.object(watchdog, "outbound_selection", side_effect=[[self.which], [self.current]]), patch.object(
+            watchdog, "replace_connection"
+        ) as replace:
+            watchdog.restore_business_trial(self.api, "proxy", state)
+        replace.assert_called_once_with(self.api, self.current)
+        self.assertEqual(state["last_business_trial"], 12)
+        self.assertFalse(path.exists())
+
+    @patch.object(watchdog, "business_probe", return_value=False)
+    @patch.object(watchdog, "healthy", return_value=(True, 1))
+    @patch.object(watchdog.time, "time", return_value=606)
+    def test_business_trial_cooldown_blocks_an_immediate_second_trial(self, *_):
+        state = {"business_failures": 1, "last_business_trial": 12}
+        group = {"business_probe": {"command": ["/service-probe"]}}
+        self.assertFalse(watchdog.guard_group(self.api, "proxy", group, state))
+        self.api.call.assert_not_called()
+
     @patch.object(watchdog, "healthy", return_value=(False, 8))
     def test_check_only_never_mutates_api(self, _):
         self.assertFalse(watchdog.guard_group(self.api, "proxy", {}, {"failures": 10}, check_only=True))

@@ -20,6 +20,7 @@ state, lock and backup paths to `/opt/v2raya-failover`, `/etc/v2raya-failover`,
 | `probes` | HTTPS URL, expected HTTP status, optional required response substring. All probes for a group must pass. |
 | `probe_timeout_seconds` | Per-HTTPS-probe timeout, from 4 to 30 seconds; default 8. Use a measured value for high-latency providers. |
 | `probe_connect_timeout_seconds` | Connection/TLS timeout within each probe, from 1 second to the total probe timeout; default 4. |
+| `business_probe` | Optional object with `command` (absolute executable and arguments) and `timeout_seconds` (1–30, default 25). The executable must be installed and controlled by the operator. |
 | `routing_domains` | Optional domain suffixes routed to the group, including subdomains. Existing unrelated RoutingA rules remain after the marked block. |
 | `subscription_outbound` | Optional managed outbound for subscription hosts. A separate download group avoids depending on the primary business node. |
 | `refresh_subscription_indices` | Which subscriptions an explicitly requested `--refresh` may update. An empty list disables even manual updates through this tool. |
@@ -56,6 +57,18 @@ OpenAI-compatible route returns HTTP 401 and the expected missing-authentication
 message. Verify the status and body for your gateway before configuring the probe.
 The route check establishes connectivity. Monitor authenticated inference separately.
 Keep an OpenAI probe when direct OpenAI access is also required.
+
+An optional business probe can run a real operation through the deployed application.
+The command runs once per healthy proxy round, without a shell. Exit 0 confirms
+success, exit 1 means the application request timed out after establishing its
+connection, and other outcomes indicate a probe error. Command output is discarded.
+Keep credentials out of arguments and use a read-only operation with a short deadline.
+
+Two failures at the default threshold can start a trial after rechecking the current
+application request. An alternative must pass isolated proxy checks and use a different
+exit IP. The watchdog keeps the new route only after both proxy ports and the actual
+business operation pass. A failing or interrupted trial rolls back the selection.
+The watchdog allows at most one trial per configured group in ten minutes.
 
 `--check` requires both a healthy live route and a cached alternative that matches
 the profile. `candidate_pool_unavailable` reports a missing selection or an empty

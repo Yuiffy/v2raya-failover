@@ -141,6 +141,18 @@ def validate(config, api):
         connect_timeout = group.get("probe_connect_timeout_seconds", 4)
         if type(connect_timeout) not in (int, float) or not 1 <= connect_timeout <= timeout:
             raise ConfigurationError("probe_connect_timeout_seconds must be between 1 and probe_timeout_seconds")
+        probe = group.get("business_probe")
+        if probe is not None:
+            if not isinstance(probe, dict):
+                raise ConfigurationError("business_probe must be a JSON object")
+            command = probe.get("command")
+            if (not isinstance(command, list) or not command
+                    or not all(isinstance(arg, str) and arg for arg in command)
+                    or not Path(command[0]).is_absolute()):
+                raise ConfigurationError("business_probe.command must start with an absolute executable path")
+            deadline = probe.get("timeout_seconds", 25)
+            if type(deadline) not in (int, float) or not 1 <= deadline <= 30:
+                raise ConfigurationError("business_probe.timeout_seconds must be between 1 and 30")
     if config.get("subscription_outbound") and config["subscription_outbound"] not in config["groups"]:
         raise ConfigurationError("subscription_outbound must name a managed group")
     for index in config.get("refresh_subscription_indices", []):

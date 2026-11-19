@@ -173,7 +173,21 @@ def log_probe_failure(proxy, outbound, url, rc, status, expected, elapsed):
         elapsed_seconds=round(elapsed, 3))
 
 
-def healthy(proxy, group, *, report_outbound=None):
+TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"
+BUSINESS_SWITCH_COOLDOWN = 600
+
+
+def exit_ip(body):
+    for line in body.splitlines():
+        if line.startswith("ip="):
+            try:
+                return ipaddress.ip_address(line[3:])
+            except ValueError:
+                return None
+    return None
+
+
+def healthy(proxy, group, *, report_outbound=None, exclude_exit=None):
     total = 0.0
     timeout = group.get("probe_timeout_seconds", 8)
     connect_timeout = group.get("probe_connect_timeout_seconds", 4)
@@ -186,13 +200,15 @@ def healthy(proxy, group, *, report_outbound=None):
                 log_probe_failure(proxy, report_outbound, probe["url"], rc, status, expected, elapsed)
             return False, total
     country = group.get("require_country") or ("US" if group.get("require_us") else None)
-    if country:
-        url = "https://www.cloudflare.com/cdn-cgi/trace"
-        rc, status, body, elapsed = curl(url, proxy, timeout=timeout, connect_timeout=connect_timeout)
+    if country or exclude_exit is not None:
+        rc, status, body, elapsed = curl(TRACE_URL, proxy, timeout=timeout, connect_timeout=connect_timeout)
         total += elapsed
-        if rc or status != "200" or "loc=" + country not in body.splitlines():
+        candidate_exit = exit_ip(body) if exclude_exit is not None else None
+        wrong_country = country and "loc=" + country not in body.splitlines()
+        wrong_exit = exclude_exit is not None and candidate_exit in (None, exclude_exit)
+        if rc or status != "200" or wrong_country or wrong_exit:
             if report_outbound is not None:
-                log_probe_failure(proxy, report_outbound, url, rc, status, "200", elapsed)
+                log_probe_failure(proxy, report_outbound, TRACE_URL, rc, status, "200", elapsed)
             return False, total
     return True, total
 
@@ -324,7 +340,7 @@ def matching_cached_nodes(api, group, exclude=None):
                 yield subindex, index, node
 
 
-def best_candidate(api, group, current):
+def best_candidate(api, group, current, *, exclude_exit=None):
     exclude = (current.get("sub"), current.get("id"))
     candidates = [
         ({"_type": "subscriptionServer", "sub": sub, "id": index, "outbound": current["outbound"]}, node)
@@ -348,7 +364,7 @@ def best_candidate(api, group, current):
     def check(item):
         try:
             with isolated_proxy(api.config, item[1]) as proxy:
-                ok, elapsed = healthy(proxy, group)
+                ok, elapsed = healthy(proxy, group, exclude_exit=exclude_exit)
                 return elapsed if ok else float("inf"), item
         except (OSError, RuntimeError, subprocess.SubprocessError):
             return float("inf"), item
@@ -435,23 +451,94 @@ def named_node(api, which):
     return result
 
 
+def business_probe(group, outbound):
+    """Return True for success, False for a verified slow request, or None for probe errors."""
+    probe = group.get("business_probe")
+    if probe is None:
+        return True
+    try:
+        result = subprocess.run(probe["command"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=probe.get("timeout_seconds", 25), check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        log("business_probe_unavailable", outbound=outbound, kind=type(error).__name__)
+        return None
+    if result.returncode in (0, 1):
+        return result.returncode == 0
+    log("business_probe_unavailable", outbound=outbound, exit_code=result.returncode)
+    return None
+
+
+def trial_path(config, name):
+    path = Path(config["state_file"])
+    return path.with_name(path.stem + ".business-trial-" + name + ".json")
+
+
+def outbound_selection(api, name):
+    return [{key: item[key] for key in ("_type", "sub", "id", "outbound") if key in item}
+            for item in api.call("touch")["touch"]["connectedServer"] if item.get("outbound") == name]
+
+
+def restore_business_trial(api, name, state):
+    path = trial_path(api.config, name)
+    if not path.exists():
+        return
+    trial = read_private_json(path)
+    before = trial["previous"]
+    selected = outbound_selection(api, name)
+    candidate = trial["candidate"]
+    # Older API versions can briefly select both nodes during replacement.
+    if candidate in selected and all(item in (before, candidate) for item in selected):
+        replace_connection(api, before)
+        if outbound_selection(api, name) != [before]:
+            raise RuntimeError("Recovered trial still has an unexpected selection")
+        log("business_trial_recovered", outbound=name)
+    elif selected != [before]:
+        log("business_trial_selection_changed", outbound=name)
+    state["last_business_trial"] = trial["started_at"]
+    path.unlink()
+
+
 def guard_group(api, name, group, state, check_only=False):
     proxy = api.config["proxy_url"]
-    ok, _ = healthy(proxy, group, report_outbound=name)
-    count = 0 if ok else state.get("failures", 0) + 1
+    proxy_ok, _ = healthy(proxy, group, report_outbound=name)
+    business_ok = business_probe(group, name) if proxy_ok else None
+    count = 0 if proxy_ok else state.get("failures", 0) + 1
     state["failures"] = count
-    if ok or check_only:
-        return ok
-    log("probe_failed", outbound=name, consecutive=count)
+    business_failure = proxy_ok and business_ok is False
+    if group.get("business_probe") is not None:
+        business_count = state.get("business_failures", 0) + 1 if business_failure else 0
+        state["business_failures"] = business_count
+    if proxy_ok and not business_failure:
+        return business_ok is True
+    if check_only:
+        return False
+    if business_failure:
+        count = business_count
+        log("business_probe_failed", outbound=name, consecutive=count)
+    else:
+        log("probe_failed", outbound=name, consecutive=count)
     if count < api.config.get("failure_threshold", 2):
         return False
-    connected = api.call("touch")["touch"]["connectedServer"]
-    current = next((x for x in connected if x.get("outbound") == name), None)
-    if current is None:
-        log("outbound_not_selected", outbound=name)
+    exclude_exit = None
+    if group.get("business_probe") is not None:
+        last_trial = max(state.get("last_business_trial", 0), state.get("last_switch", 0))
+        if time.time() - last_trial < BUSINESS_SWITCH_COOLDOWN:
+            log("business_trial_cooldown", outbound=name)
+            return False
+    if business_failure:
+        rc, status, body, _ = curl(TRACE_URL, proxy, timeout=5, connect_timeout=3)
+        exclude_exit = exit_ip(body) if not rc and status == "200" else None
+        if exclude_exit is None:
+            log("business_trial_exit_unknown", outbound=name)
+            return False
+    connected = outbound_selection(api, name)
+    if len(connected) != 1:
+        log("outbound_selection_unexpected", outbound=name, selected_nodes=len(connected))
         return False
+    current = connected[0]
     api.reload()
-    candidate = best_candidate(api, group, current)
+    candidate = best_candidate(api, group, current, exclude_exit=exclude_exit)
     if candidate is None:
         log("no_healthy_cached_candidate", outbound=name)
         return False
@@ -461,20 +548,47 @@ def guard_group(api, name, group, state, check_only=False):
     if node_key(api.subs[which["sub"]]["servers"][which["id"] - 1]["serverObj"]) != node_key(node):
         log("candidate_changed_retry_next_run", outbound=name)
         return False
-    latest = next((x for x in api.call("touch")["touch"]["connectedServer"] if x.get("outbound") == name), None)
-    if latest != current or healthy(proxy, group)[0]:
-        log("recovered_or_manually_changed", outbound=name)
-        return True
+    if outbound_selection(api, name) != [current]:
+        log("outbound_selection_changed", outbound=name)
+        return False
+    if business_failure:
+        confirmed = business_probe(group, name)
+        if confirmed is not False:
+            state["business_failures"] = 0
+            return confirmed is True
+        if outbound_selection(api, name) != [current]:
+            log("outbound_selection_changed", outbound=name)
+            return False
+    elif healthy(proxy, group)[0]:
+        state["failures"] = 0
+        return business_probe(group, name) is True
     before = backup(api.config, api)
+    journal = None
+    if group.get("business_probe") is not None:
+        journal = trial_path(api.config, name)
+        state["last_business_trial"] = time.time()
+        write_private(journal, {"previous": current, "candidate": which, "started_at": state["last_business_trial"]})
     try:
         replace_connection(api, which)
         for port in api.config["verify_ports"]:
             if not healthy("http://127.0.0.1:" + str(port), group, report_outbound=name)[0]:
                 raise RuntimeError("switched outbound did not pass validation")
+        if journal is not None:
+            if business_probe(group, name) is not True:
+                raise RuntimeError("switched outbound did not pass the business probe")
+            if outbound_selection(api, name) != [which]:
+                raise RuntimeError("selected outbound changed during business validation")
+            journal.unlink()
+            state["business_failures"] = 0
         state.update(failures=0, last_switch=time.time())
-        log("switched", outbound=name, subscription_index=which["sub"], node_id=which["id"], backup=str(before))
+        log("switched", outbound=name, subscription_index=which["sub"], node_id=which["id"],
+            backup=str(before), trigger="business" if business_failure else "proxy")
     except Exception:
-        replace_connection(api, current)
+        if journal is None:
+            replace_connection(api, current)
+        else:
+            restore_business_trial(api, name, state)
+            state["business_failures"] = 0
         log("switch_rolled_back", outbound=name, backup=str(before))
         raise
     # Notifications must not roll back an already verified, working proxy.
@@ -610,6 +724,9 @@ def run(config, state, check_only=False, refresh=False):
     api = LocalAPI(config)
     if not check_only:
         restore_subscription_override(api)
+        for name, group in config["groups"].items():
+            if group.get("business_probe") is not None:
+                restore_business_trial(api, name, state.setdefault(name, {}))
     touch = api.call("touch")
     if not touch.get("running"):
         log("core_stopped_no_action")
@@ -618,6 +735,11 @@ def run(config, state, check_only=False, refresh=False):
     candidate_pool_ready = True
     connected = touch["touch"]["connectedServer"]
     for name, group in config["groups"].items():
+        group_state = state.setdefault(name, {})
+        if check_only and group.get("business_probe") is not None and trial_path(config, name).exists():
+            log("business_trial_pending", outbound=name)
+            all_healthy = False
+            continue
         selected = [item for item in connected if item.get("outbound") == name]
         available = False
         if len(selected) == 1:
@@ -627,7 +749,6 @@ def run(config, state, check_only=False, refresh=False):
         if not available:
             log("candidate_pool_unavailable", outbound=name, selected_nodes=len(selected))
             candidate_pool_ready = False
-        group_state = state.setdefault(name, {})
         all_healthy = guard_group(api, name, group, group_state, check_only) and all_healthy
     # Refresh must still work when one outbound has no surviving cached nodes.
     if not check_only:
