@@ -266,9 +266,28 @@ class FailoverTests(unittest.TestCase):
     @patch.object(watchdog, "guard_group", return_value=False)
     @patch.object(watchdog, "LocalAPI")
     def test_subscription_can_refresh_with_exhausted_outbound(self, api_class, _, restore, refresh):
-        api_class.return_value.call.return_value = {"running": True}
+        api_class.return_value.call.return_value = {"running": True, "touch": {"connectedServer": []}}
         watchdog.run({"groups": {"proxy": {}}}, {})
         refresh.assert_called_once()
+
+    @patch.object(watchdog, "log")
+    @patch.object(watchdog, "guard_group", return_value=True)
+    @patch.object(watchdog, "LocalAPI")
+    def test_read_only_check_requires_a_matching_alternative(self, api_class, _, log):
+        self.api.call.return_value["running"] = True
+        node = self.shadowsocks_node()
+        self.api.subs[0]["servers"][0]["serverObj"] = node
+        api_class.return_value = self.api
+        group = {"subscription_indices": [0], "name_prefixes": ["🇺🇸"]}
+        config = {"groups": {"proxy": group}}
+
+        self.assertFalse(watchdog.run(config, {}, check_only=True))
+        log.assert_any_call("candidate_pool_unavailable", outbound="proxy", selected_nodes=1)
+        log.assert_called_with("check_complete", healthy=True, candidate_pool_ready=False, check_only=True)
+
+        self.api.subs[0]["servers"][1]["serverObj"]["ps"] = "🇺🇸 alternate"
+        self.assertTrue(watchdog.run(config, {}, check_only=True))
+        self.assertTrue(all(call.args == ("touch",) for call in self.api.call.call_args_list))
 
     @patch.object(watchdog, "reload_core")
     def test_interrupted_subscription_override_is_recovered(self, reload):

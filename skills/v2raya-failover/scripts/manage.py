@@ -124,12 +124,10 @@ def validate(config, api):
         country = group.get("require_country")
         if country and not re.fullmatch(r"[A-Z]{2}", country):
             raise ConfigurationError("require_country must be an uppercase two-letter code")
-        matches = 0
         for index in group["subscription_indices"]:
             if not isinstance(index, int) or index < 0 or index >= len(api.subs):
                 raise ConfigurationError("A subscription index is out of range (indices start at zero)")
-            matches += sum(watchdog.supported(raw.get("serverObj", {})) and any(watchdog.node_name(raw.get("serverObj", {})).startswith(p) for p in group["name_prefixes"]) for raw in api.subs[index].get("servers", []))
-        if matches < 2:
+        if sum(1 for _ in watchdog.matching_cached_nodes(api, group)) < 2:
             raise ConfigurationError("Each managed group needs at least two supported cached candidates")
         for probe in group["probes"]:
             host_of(probe["url"])

@@ -50,11 +50,18 @@ attempts to restore the previous selection. Each core reload can interrupt exist
 connections; this is recovery, not connection-preserving load balancing.
 
 Choose probes for the upstream that the managed service actually uses. For example,
-when every model request uses Cloudflare AI Gateway, its HTTPS endpoint can be checked
-for HTTP 200 and the expected `ai-gateway` response, together with an optional country
-check. This establishes proxy connectivity to that gateway; it does not establish direct
-OpenAI access or successful authenticated model inference. Keep an OpenAI probe when
-direct OpenAI access is also required.
+when every model request uses Cloudflare AI Gateway, make an unauthenticated GET to
+the provider route used by the service and verify its expected response. A typical
+OpenAI-compatible route returns HTTP 401 and the expected missing-authentication
+message. Verify the status and body for your gateway before configuring the probe.
+The route check establishes connectivity. Monitor authenticated inference separately.
+Keep an OpenAI probe when direct OpenAI access is also required.
+
+`--check` requires both a healthy live route and a cached alternative that matches
+the profile. `candidate_pool_unavailable` reports a missing selection or an empty
+filtered pool. `candidate_checks_exhausted` reports an eligible pool that failed TCP
+or isolated HTTPS checks. Probe failure logs show the hostname, HTTP status, curl
+exit code, and elapsed time. They omit URLs and response bodies.
 
 The timer stops a run after 240 seconds and cleans up child Xray processes. Extremely
 large or uniformly unreachable subscriptions may exceed that budget. Prefer a focused
