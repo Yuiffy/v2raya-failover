@@ -48,6 +48,17 @@ class AuthenticationTests(unittest.TestCase):
             self.assertTrue(watchdog.healthy("http://127.0.0.1:1234", {"probes": [], "require_country": "JP"})[0])
             self.assertFalse(watchdog.healthy("http://127.0.0.1:1234", {"probes": [], "require_country": "US"})[0])
 
+    def test_isolated_candidate_must_prove_a_different_exit(self):
+        group = {"probes": [], "require_country": "US"}
+        current = watchdog.exit_ip("ip=2001:db8::1")
+        for body, expected in (("ip=2001:db8:0:0::1\nloc=US\n", False),
+                               ("loc=US\n", False), ("ip=2001:db8::2\nloc=US\n", True)):
+            with self.subTest(expected=expected), patch.object(watchdog, "curl", return_value=(0, "200", body, 1)):
+                self.assertEqual(
+                    watchdog.healthy("http://127.0.0.1:1234", group, exclude_exit=current)[0],
+                    expected,
+                )
+
     def test_probe_timeouts_reach_business_and_country_requests(self):
         group = {"probe_timeout_seconds": 15, "probe_connect_timeout_seconds": 10,
                  "probes": [{"url": "https://service.example/health", "status": 204}], "require_country": "US"}
